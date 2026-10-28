@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scribiva：在任意编辑器里用说话代替打字</title>
+<meta name="description" content="Scribiva 是 Windows 与 Linux 上的语音输入工具：按下全局快捷键说话，文字写进当前光标位置。支持 20 种语音语言与智能语法修正。">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+<link rel="alternate" hreflang="zh-CN" href="./">
+<link rel="alternate" hreflang="en" href="en/">
+<link rel="stylesheet" href="assets/style.css">
+<!-- 上线前占位值（价格、免费额度、联系邮箱、下载链接、SHA-256）全部在 assets/config.js 中修改。
+     待定价确认：免费层 30 分钟/月（1,800 秒）、Pro $8/月 或 $69/年 均为未批准的建议值（PRD §11.1）。
+     下面 HTML 中的同名文字只是脚本未运行时的后备显示，请保持与 config.js 一致。 -->
+<script src="assets/config.js" defer></script>
+<script src="assets/main.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">跳到正文</a>
+<header class="site-head">
+  <div class="wrap">
+    <a class="brand" href="./"><img src="assets/logo.svg" alt="" width="28" height="28">Scribiva</a>
+    <nav class="nav" aria-label="页面导航">
+      <a href="#how">使用方法</a>
+      <a href="#features">功能</a>
+      <a href="#compat">兼容性</a>
+      <a href="#pricing">价格</a>
+      <a href="#download">下载</a>
+      <a href="#faq">常见问题</a>
+    </nav>
+    <a class="lang-switch" href="en/" hreflang="en" lang="en">English</a>
+  </div>
+</header>
+
+<main id="main">
+<section class="hero" aria-labelledby="hero-title">
+  <div class="wrap">
+    <div>
+      <h1 id="hero-title">按下快捷键说话，<br>文字写进光标所在处。</h1>
+      <p class="lede">Scribiva 是 Windows 与 Linux 上的语音输入工具。在 Obsidian、浏览器、文档或 IDE 里，按一次快捷键开始说话，再按一次停止，识别并修正后的文字会插入你正在写的位置。</p>
+      <div class="actions">
+        <a class="btn" href="#download">下载 Windows / Linux 版</a>
+        <a class="btn ghost" href="#pricing">查看价格</a>
+      </div>
+      <p class="hero-note">每月有免费额度。语音在 Scribiva 美国服务器上云端处理，<a href="#privacy">了解数据如何处理</a>。</p>
+    </div>
+
+    <figure class="editor" aria-labelledby="demo-cap">
+      <div class="editor-bar" aria-hidden="true">
+        <span class="dots"><i></i><i></i><i></i></span>
+        <span>周会笔记.md · Obsidian Live Preview</span>
+      </div>
+      <div class="editor-body">
+        <p><span class="md-sym">## </span><span class="md-h">本周进度</span></p>
+        <p><span class="md-sym">- </span>登录流程已合并</p>
+        <p data-demo-text><span class="dictated"><span class="md-sym">- </span>修复 <code>config.yaml</code> 里的超时设置，从 30 秒改成 60 秒</span><span class="caret" aria-hidden="true"></span></p>
+      </div>
+      <p class="spoken">你说的是：<q>嗯，列表项，修复 config 点 yaml 里的超时设置，从三十秒改成六十秒</q></p>
+      <div class="hud" data-state="done" role="status">
+        <span class="sig" aria-hidden="true"></span><span class="hud-label">已插入光标位置</span>
+      </div>
+      <figcaption id="demo-cap" class="sr-only">示意：在 Obsidian 笔记中口述一条列表项。Scribiva 去掉口头禅，把“列表项”转成 Markdown 列表，保留文件名和数字，并插入到光标处。</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="how" aria-labelledby="how-title">
+  <div class="wrap">
+    <div class="section-head">
+      <h2 id="how-title">四步完成一次听写</h2>
+      <p>日常使用不需要打开主窗口，托盘图标和一个不抢焦点的小悬浮条就够了。</p>
+    </div>
+    <ol class="steps">
+      <li><h3>把光标放进编辑区</h3><p>任意受支持的编辑器：笔记、文档、邮件、浏览器输入框。</p></li>
+      <li><h3>按快捷键开始说话</h3><p>悬浮条显示“正在录音”和计时。快捷键可自定义。</p></li>
+      <li><h3>再按一次停止</h3><p>Scribiva 记下当前目标窗口，开始转写与修正。</p></li>
+      <li><h3>文字写入光标处</h3><p>插入前再次确认目标窗口没变；变了就只复制，交给你粘贴。</p></li>
+    </ol>
+  </div>
+</section>
+
+<section id="features" aria-labelledby="features-title">
+  <div class="wrap">
+    <div class="section-head">
+      <h2 id="features-title">说得随意，写出来是能直接用的文字</h2>
+    </div>
+    <dl class="features">
+      <div>
+        <dt>三档写作模式</dt>
+        <dd>
+          <ul class="modes">
+            <li><b>原文</b><span>逐字转写，不经过语言模型修改。</span></li>
+            <li><b>智能修正</b><span>默认模式。补标点、去口头禅、修正明确的语法错误，保留原意。</span></li>
+            <li><b>流畅表达</b><span>整理成更通顺的书面语，可能改变措辞，建议校对。</span></li>
+          </ul>
+        </dd>
+      </div>
+      <div>
+        <dt>不乱改的内容</dt>
+        <dd><p>代码、命令、文件路径、URL、邮箱和 Markdown 结构在修正前后逐字保持；数字的数值不变，只允许“三点半”写成“3:30”这类书面化。修正失败时回退到原始转写。</p></dd>
+      </div>
+      <div>
+        <dt>个人词典</dt>
+        <dd><p>把人名、产品名、代码标识符加进词典，识别和修正时都会按词典保留。词典随账户保存，可导出和删除。</p></dd>
+      </div>
+      <div>
+        <dt>口述格式命令</dt>
+        <dd><p>说“换行”“新段落”“列表项”（英文为 “new line”“new paragraph”“bullet”），由固定规则转成换行、空行和 Markdown 列表。不需要时可在设置中关闭。</p></dd>
+      </div>
+      <div>
+        <dt>静音不出幻觉文字</dt>
+        <dd><p>静音或噪声里冒出的“谢谢观看”之类虚构文字会被过滤；可疑结果只放进恢复区，不自动插入。</p></dd>
+      </div>
+      <div>
+        <dt>不误贴、不替你发送</dt>
+        <dd><p>如果无法确认目标窗口，Scribiva 只把文字复制到剪贴板，不粘贴。它从不按回车，不会替你发送消息或执行命令。终端类窗口默认只复制。</p></dd>
+      </div>
+      <div>
+        <dt>Obsidian 专项测试</dt>
+        <dd><p>Live Preview 与 Source Mode 是重点测试场景，覆盖 Markdown、换行和撤销。不需要安装 Obsidian 插件。</p></dd>
+      </div>
+      <div>
+        <dt>结果不丢</dt>
+        <dd><p>插入失败或网络出错时，最近一次文字保留在本机，可复制、重试或丢弃。</p></dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+<section id="languages" aria-labelledby="languages-title">
+  <div class="wrap">
+    <div class="section-head">
+      <h2 id="languages-title">20 种语音语言</h2>
+      <p>可自动检测，也可手动指定。Scribiva 按你说的语言转写，不做翻译。中文可选简体或繁体输出。</p>
+    </div>
+    <ul class="langs">
+      <li><span lang="en">English</span><code>en</code></li>
+      <li><span lang="zh">中文（普通话）</span><code>zh</code></li>
+      <li><span lang="ja">日本語</span><code>ja</code></li>
+      <li><span lang="ko">한국어</span><code>ko</code></li>
+      <li><span lang="es">Español</span><code>es</code></li>
+      <li><span lang="fr">Français</span><code>fr</code></li>
+      <li><span lang="de">Deutsch</span><code>de</code></li>
+      <li><span lang="pt">Português</span><code>pt</code></li>
+      <li><span lang="it">Italiano</span><code>it</code></li>
+      <li><span lang="ru">Русский</span><code>ru</code></li>
+      <li><span lang="ar" dir="rtl">العربية</span><code>ar</code></li>
+      <li><span lang="hi">हिन्दी</span><code>hi</code></li>
+      <li><span lang="tr">Türkçe</span><code>tr</code></li>
+      <li><span lang="nl">Nederlands</span><code>nl</code></li>
+      <li><span lang="pl">Polski</span><code>pl</code></li>
+      <li><span lang="id">Bahasa Indonesia</span><code>id</code></li>
+      <li><span lang="vi">Tiếng Việt</span><code>vi</code></li>
+      <li><span lang="th">ไทย</span><code>th</code></li>
+      <li><span lang="sv">Svenska</span><code>sv</code></li>
+      <li><span lang="uk">Українська</span><code>uk</code></li>
+    </ul>
+    <p class="note">这是语音识别支持的语言，不是软件界面语言。应用界面首发提供简体中文和英文。自动检测适合一段话只说一种语言；同一句里混说多种语言时，准确度会因组合而异，中英混说是重点测试项。</p>
+  </div>
+</section>
+
+<section id="compat" aria-labelledby="compat-title">
+  <div class="wrap">
+    <div class="section-head">
+      <h2 id="compat-title">兼容性与已知限制</h2>
+      <p>以下环境仍在测试中，均标为 Beta。正式测试结论会在发布时更新到这里。“自动粘贴”表示 Scribiva 能确认目标窗口后直接写入；“只复制”表示文字复制到剪贴板，由你按 <kbd>Ctrl</kbd>+<kbd>V</kbd> 粘贴。</p>
+    </div>
+    <table class="compat">
+      <caption class="sr-only">Scribiva 已测试的系统环境</caption>
+      <thead>
+        <tr><th scope="col">系统环境</th><th scope="col">插入方式</th><th scope="col">状态</th><th scope="col">说明</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row">Windows 11 x64</th>
+          <td data-label="插入方式"><span class="mode-paste">自动粘贴</span></td>
+          <td data-label="状态"><span class="badge">Beta / 测试中</span></td>
+          <td data-label="说明">普通用户权限的应用。</td>
+        </tr>
+        <tr>
+          <th scope="row">Ubuntu 24.04 / 26.04，GNOME Wayland</th>
+          <td data-label="插入方式"><span class="mode-paste">安装扩展后自动粘贴</span></td>
+          <td data-label="状态"><span class="badge">Beta / 测试中</span></td>
+          <td data-label="说明">需要安装 Scribiva GNOME 扩展来确认焦点窗口；未安装时只复制。</td>
+        </tr>
+        <tr>
+          <th scope="row">KDE Plasma Wayland</th>
+          <td data-label="插入方式"><span class="mode-copy">只复制</span></td>
+          <td data-label="状态"><span class="badge">Beta / 测试中</span></td>
+          <td data-label="说明">当前版本只复制到剪贴板。</td>
+        </tr>
+        <tr>
+          <th scope="row">X11 桌面（如 Linux Mint Cinnamon）</th>
+          <td data-label="插入方式"><span class="mode-paste">自动粘贴</span></td>
+          <td data-label="状态"><span class="badge">Beta / 测试中</span></td>
+          <td data-label="说明">通过系统接口读取当前窗口。</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="limits">
+      <div>
+        <h3>不会自动写入的场景</h3>
+        <ul>
+          <li>管理员权限运行的窗口</li>
+          <li>密码输入框</li>
+          <li>锁屏界面</li>
+          <li>远程桌面</li>
+        </ul>
+      </div>
+      <div>
+        <h3>其他说明</h3>
+        <ul>
+          <li>暂不支持 macOS 和移动端。</li>
+          <li>不承诺兼容所有 Linux 发行版和 Wayland 合成器。</li>
+          <li>需要联网使用，没有离线识别。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="privacy" aria-labelledby="privacy-title">
+  <div class="wrap">
+    <div class="section-head">
+      <h2 id="privacy-title">你的语音如何被处理</h2>
+      <p>Scribiva 不是离线工具。每次听写的音频都会上传到云端处理，下面是完整的路径。</p>
+    </div>
+    <dl class="features">
+      <div>
+        <dt>处理地点：美国</dt>
+        <dd><p>音频发送到 Scribiva 位于美国的服务器，由服务器调用 Groq 完成语音识别和文字修正。客户端不直接连接 Groq。对中国大陆用户而言，这属于数据出境。</p></dd>
+      </div>
+      <div>
+        <dt>保存多久</dt>
+        <dd><p>音频只在内存中处理，不落盘保存。识别结果在服务器上最多保留 15 分钟，用于网络中断后的恢复。</p></dd>
+      </div>
+      <div>
+        <dt>只在你按下快捷键时录音</dt>
+        <dd><p>没有后台常开的麦克风。录音时悬浮条始终可见，取消录音不会上传。</p></dd>
+      </div>
+      <div>
+        <dt>随时删除</dt>
+        <dd><p>可在账户页删除数据，或运行 <code>scribiva service delete --confirm</code>。账单记录按财务法规保留。详见<a href="privacy.html">隐私政策</a>。</p></dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+<section id="pricing" aria-labelledby="pricing-title">
+  <div class="wrap">
+    <div class="section-head">
+      <h2 id="pricing-title">价格</h2>
+      <p>每月免费额度按自然月重置。升级后随时可以取消，到期后回到免费版，账户不会被停用。</p>
+    </div>
+    <!-- 待定价确认：以下价格与额度为占位值，修改请编辑 assets/config.js -->
+    <div class="plans">
+      <div class="plan">
+        <h3>免费版</h3>
+        <p class="price"><span data-cfg="free_quota">30 分钟/月</span></p>
+        <p>注册账户即可使用，每月重置。</p>
+        <ul>
+          <li>全部 20 种语音语言</li>
+          <li>三档写作模式与个人词典</li>
+          <li>Windows 与 Linux 通用</li>
+        </ul>
+      </div>
+      <div class="plan">
+        <h3>Pro</h3>
+        <p class="price"><span data-cfg="price_monthly">$8/月</span><br><small>或 <span data-cfg="price_yearly">$69/年</span></small></p>
+        <p>月度额度：<span data-cfg="pro_quota">[Pro 月度额度待定]</span></p>
+        <ul>
+          <li>包含免费版全部功能</li>
+          <li>通过 Stripe Checkout 付款，可用的付款方式以结账页面显示为准</li>
+          <li>在 Stripe 账单门户随时取消，权益保留到当期结束</li>
+        </ul>
+      </div>
+    </div>
+    <p class="note">价格以美元计，最终价格以结账页面为准。在应用内“账户与订阅”中升级。中国大陆用户可用的付款方式取决于 Stripe 结账页面实际提供的选项。参见<a href="refund.html">退款与取消政策</a>。</p>
+  </div>
+</section>
+
+<section id="download" aria-labelledby="download-title">
+  <div class="wrap">
+    <div class="section-head">
+      <h2 id="download-title">下载</h2>
+      <p>Windows 与 Linux 版本同时发布。版本 <span data-cfg="version">[版本号 / version]</span>。</p>
+    </div>
+    <div class="downloads">
+      <div class="dl">
+        <h3><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 5.5 10 4.5v7H3zM11 4.3 21 3v8.5H11zM3 12.5h7v7l-7-1zM11 12.5h10V21l-10-1.4z"/></svg>Windows</h3>
+        <p class="meta">Windows 11 x64 · <code>.exe</code> 安装程序</p>
+        <span class="btn" role="link" aria-disabled="true" data-dl="windows" data-ready-label="下载 Windows 安装程序">下载 Windows 安装程序</span>
+        <span class="state" data-dl-state>即将发布</span>
+        <dl class="hash">
+          <dt>SHA-256</dt>
+          <dd><code data-cfg="windows_sha256">[SHA-256 待发布 / pending]</code></dd>
+          <dt>在 PowerShell 中校验</dt>
+          <dd><pre class="cmd">Get-FileHash .\Scribiva-Setup.exe -Algorithm SHA256</pre></dd>
+        </dl>
+      </div>
+      <div class="dl">
+        <h3><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" d="M4 7h16v12H4zM4 7l2-3h12l2 3M9 11h6"/></svg>Linux</h3>
+        <p class="meta">Ubuntu、Linux Mint · <code>.deb</code> 软件包</p>
+        <span class="btn" role="link" aria-disabled="true" data-dl="linux_deb" data-ready-label="下载 .deb 软件包">下载 .deb 软件包</span>
+        <span class="state" data-dl-state>即将发布</span>
+        <dl class="hash">
+          <dt>SHA-256</dt>
+          <dd><code data-cfg="linux_deb_sha256">[SHA-256 待发布 / pending]</code></dd>
+          <dt>在终端中校验</dt>
+          <dd><pre class="cmd">sha256sum scribiva_*.deb</pre></dd>
+        </dl>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="faq" aria-labelledby="faq-title">
+  <div class="wrap">
+    <div class="section-head">
+      <h2 id="faq-title">常见问题</h2>
+    </div>
+    <div class="faq">
+      <details>
+        <summary>可以离线使用吗？</summary>
+        <div><p>不可以。识别与修正都在云端完成，需要联网。断网时 Scribiva 会明确提示，不影响系统自带的输入法。</p></div>
+      </details>
+      <details>
+        <summary>为什么有时只复制、不自动粘贴？</summary>
+        <div><p>Scribiva 只在确认目标窗口没有变化时才自动写入。如果你在处理期间切换了窗口，或者系统不提供焦点信息（例如未安装扩展的 GNOME Wayland、当前的 KDE Wayland），它会把文字复制到剪贴板，避免贴进错误的地方。</p></div>
+      </details>
+      <details>
+        <summary>会替我发送消息或执行命令吗？</summary>
+        <div><p>不会。Scribiva 从不按回车，也不会提交表单或执行语音中的指令。终端类窗口默认只复制。</p></div>
+      </details>
+      <details>
+        <summary>Obsidian 需要装插件吗？</summary>
+        <div><p>不需要。在 Live Preview 或 Source Mode 中把光标放好即可。Reading View 不是可编辑区域，Scribiva 会提示并保留文字。</p></div>
+      </details>
+      <details>
+        <summary>会把我的话翻译成英文吗？</summary>
+        <div><p>不会。说日语就写日语，说中文就写中文。Scribiva 不是翻译工具。</p></div>
+      </details>
+      <details>
+        <summary>免费额度用完了会怎样？</summary>
+        <div><p>开始录音前会提示本月剩余时长和重置日期。如果某一段录音超出剩余额度，这一段仍会完整处理；之后需要等下月重置或升级 Pro。</p></div>
+      </details>
+      <details>
+        <summary>在中国大陆能用吗？</summary>
+        <div><p>官网、下载和应用只连接 Scribiva 的美国服务器，不依赖其他境外资源。由于语音在美国处理，使用即意味着数据出境，请在首次使用前阅读隐私告知。跨境网络的速度可能比海外慢。</p></div>
+      </details>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer class="site-foot">
+  <div class="wrap">
+    <p>© Scribiva · 联系我们：<a data-cfg-mailto href="mailto:support@[域名]">support@[域名]</a></p>
+    <nav aria-label="页脚链接">
+      <ul>
+        <li><a href="privacy.html">隐私政策</a></li>
+        <li><a href="terms.html">服务条款</a></li>
+        <li><a href="refund.html">退款与取消</a></li>
+        <li><a href="en/" hreflang="en" lang="en">English</a></li>
+      </ul>
+    </nav>
+  </div>
+</footer>
+</body>
+</html>

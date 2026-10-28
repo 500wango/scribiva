@@ -1,0 +1,7 @@
+{
+  "uuid": "scribiva@scribiva.app",
+  "name": "Scribiva",
+  "description": "Companion for the Scribiva voice-dictation client. Exposes only the focused window's app id, WM class, window id and process id to the local Scribiva client over the session D-Bus (never window titles or content), so dictated text is not auto-pasted into the wrong window. Also shows a top-bar recording indicator that never takes focus.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "version-name": "1.0"
+}

@@ -1,0 +1,146 @@
+// Status + recovery screen (docs/06 §3, PRD §7.5).
+import { useCallback, useEffect, useState } from 'react';
+import type { Last } from '../backend';
+import { noticeKey, phaseKey } from '../i18n';
+import { errorText, PHASE_GLYPH, Section, useApp } from '../ui';
+
+function elapsed(startMs: number | null | undefined, now: number): string {
+  if (!startMs) return '';
+  const s = Math.max(0, Math.floor((now - startMs) / 1000));
+  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+}
+
+export function StatusScreen({ onOpen }: { onOpen: (screen: 'account' | 'settings') => void }) {
+  const { backend, t, status, report, refreshStatus } = useApp();
+  const [last, setLast] = useState<Last | null>(null);
+  const [showRaw, setShowRaw] = useState(false);
+  const [now, setNow] = useState(Date.now());
+  const [copied, setCopied] = useState('');
+
+  const phase = status?.phase || 'unknown';
+  const loadLast = useCallback(async () => {
+    try { setLast(await backend.last()); } catch (e) { report(e); }
+  }, [backend, report]);
+
+  // Reload the last result whenever the state changes.
+  useEffect(() => { loadLast(); }, [loadLast, phase]);
+  useEffect(() => {
+    if (phase !== 'recording') return;
+    const id = window.setInterval(() => setNow(Date.now()), 500);
+    return () => window.clearInterval(id);
+  }, [phase]);
+
+  async function act(name: Parameters<typeof backend.action>[0]) {
+    try {
+      setCopied('');
+      await backend.action(name, last || undefined);
+      if (name === 'copy-last' || name === 'copy-raw') setCopied(t('phase_clipboard_only'));
+      await refreshStatus();
+      await loadLast();
+    } catch (e) { report(e); }
+  }
+
+  const hotkey = status?.hotkey || 'Ctrl+Alt+V';
+  const busy = phase === 'recording' || phase === 'processing' || phase === 'injecting';
+  const notice = status?.notice ? noticeKey(status.notice) : null;
+  // Linux CLI reports the last delivery outcome separately from the phase.
+  const outcome = status?.lastOutcome;
+  const outcomeText = !backend.isWindows && phase === 'idle' && outcome
+    ? t(phaseKey(outcome === 'dispatched_unverified' ? 'ready' : outcome)) : '';
+  const hint = phase === 'idle' ? t('hint_idle', { hotkey })
+    : phase === 'recording' ? t('hint_recording', { hotkey })
+      : phase === 'ready' ? t('hint_ready') : '';
+  const text = showRaw ? last?.raw : last?.text;
+  const quotaReset = status?.error?.class === 'quota' || phase === 'quota';
+
+  return (
+    <main className="grid">
+      <Section title={t('nav_status')}>
+        <div className={`status ${phase}`} role="status" aria-live="polite">
+          <span className="glyph" aria-hidden="true">{PHASE_GLYPH[phase] || '·'}</span>
+          <div>
+            <div className="statusName">
+              {t(phaseKey(phase))}
+              {phase === 'recording' && status?.recordingStartedMs ? ` · ${elapsed(status.recordingStartedMs, now)}` : ''}
+            </div>
+            {hint && <p className="muted">{hint}</p>}
+            {notice && <p className="notice-text">{t(notice)}</p>}
+            {outcomeText && <p className="notice-text">{outcomeText}</p>}
+            {status?.error && <p className="error-text">{status.error.code}: {status.error.message}</p>}
+            {status?.hotkeyError && <p className="error-text">{status.hotkeyError}</p>}
+          </div>
+        </div>
+        <div className="actions">
+          <button type="button" onClick={() => act('toggle')} disabled={phase === 'processing'}>
+            {phase === 'recording' ? t('stop') : t('start')}
+          </button>
+          <button type="button" className="soft" onClick={() => act('cancel')} disabled={!busy}>{t('cancel')}</button>
+          <button type="button" className="soft" onClick={() => act('retry')} disabled={!status?.canRetry}>{t('retry')}</button>
+          <button type="button" className="soft" onClick={() => act('discard')} disabled={phase !== 'error' && !busy}>{t('discard')}</button>
+          {!busy && phase !== 'idle' && backend.isWindows &&
+            <button type="button" className="soft" onClick={() => act('acknowledge')}>{t('dismiss')}</button>}
+        </div>
+        {quotaReset && (
+          <div className="callout">
+            <button type="button" onClick={() => onOpen('account')}>{t('nav_account')}</button>
+          </div>
+        )}
+        {!status?.signedIn && (
+          <div className="callout">
+            <span>{t('notSignedIn')}</span>
+            <button type="button" className="soft" onClick={() => onOpen('account')}>{t('signIn')}</button>
+          </div>
+        )}
+      </Section>
+
+      <Section title={t('lastResult')}>
+        <div className="actions">
+          <button type="button" className="soft" disabled={!last?.text} onClick={() => act('copy-last')}>{t('copy')}</button>
+          <button type="button" className="soft" disabled={!last?.raw} onClick={() => act('copy-raw')}>{t('copyRaw')}</button>
+          <button type="button" className="soft" disabled={!last?.available} aria-pressed={showRaw}
+            onClick={() => setShowRaw(!showRaw)}>{showRaw ? t('showFinal') : t('showRaw')}</button>
+          <button type="button" className="soft" disabled={!last?.available} onClick={() => act('clear-last')}>{t('clear')}</button>
+        </div>
+        {/* dir="auto" keeps RTL transcripts (Arabic) readable. */}
+        <pre className="lastText" dir="auto" tabIndex={0} aria-label={t('lastResult')}>
+          {last?.available ? (text || '—') : t('noResult')}
+        </pre>
+        {copied && <p className="success" role="status">{copied}</p>}
+        {!!last?.warnings.length && (
+          <p className="muted">{t('warnings')}: {last.warnings.join(' · ')}</p>
+        )}
+        {last?.suspectedNoise && <p className="notice-text">{t('phase_suspected_noise')}</p>}
+        <p className="muted small">{t('memoryOnly')}</p>
+      </Section>
+
+      {!backend.isWindows && status?.diagnostics && <Diagnostics data={status.diagnostics} />}
+      {backend.isWindows && status?.login && (
+        <Section title={t('signIn')}>
+          <p>{t('loginCode')}: <b className="code">{status.login.user_code}</b></p>
+          <p className="muted">{status.login.error ? errorText(status.login.error) : t('loginWaiting')}</p>
+        </Section>
+      )}
+    </main>
+  );
+}
+
+function Diagnostics({ data }: { data: Record<string, unknown> }) {
+  const { t } = useApp();
+  const checks = Array.isArray(data.checks) ? data.checks as { id: string; status: string; detail: string }[] : [];
+  return (
+    <Section title={t('diagnostics')} wide>
+      <p className="diagnostic">
+        session: {String(data.session ?? '-')} · desktop: {String(data.desktop ?? '-')}<br />
+        mic: {String(data.mic_node ?? '-')} · service: {String(data.service_url || '-')}
+      </p>
+      <ul className="checks">
+        {checks.map(c => (
+          <li key={c.id} className="checkItem">
+            <b>{c.id} <span className={`state ${c.status}`}>[{c.status}]</span></b>
+            <span>{c.detail}</span>
+          </li>
+        ))}
+      </ul>
+    </Section>
+  );
+}

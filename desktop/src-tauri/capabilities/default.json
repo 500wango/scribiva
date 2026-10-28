@@ -1,7 +1,7 @@
 {
- "$schema":"../gen/schemas/desktop-schema.json",
- "identifier":"main-capability",
- "description":"Scribiva settings and dictation window; only own Rust commands are exposed",
- "windows":["main"],
- "permissions":["core:default"]
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-capability",
+  "description": "Scribiva main window: only core event/window basics and Scribiva's own commands. No shell, fs, http or opener access from the webview; URLs are opened by Rust after validation.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
 }

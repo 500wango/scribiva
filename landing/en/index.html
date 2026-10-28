@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scribiva: speak instead of typing, in any editor</title>
+<meta name="description" content="Scribiva is voice dictation for Windows and Linux. Press a global hotkey, speak, and the text lands at your cursor. 20 speech languages and grammar correction.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="../assets/logo.svg" type="image/svg+xml">
+<link rel="alternate" hreflang="zh-CN" href="../">
+<link rel="alternate" hreflang="en" href="./">
+<link rel="stylesheet" href="../assets/style.css">
+<!-- All launch placeholders (prices, free quota, contact email, download URLs, SHA-256) live in ../assets/config.js.
+     Pricing pending approval (待定价确认): free 30 min/month (1,800 s), Pro $8/month or $69/year are unapproved proposals (PRD §11.1).
+     Matching text in this HTML is only a no-script fallback; keep it in sync with config.js. -->
+<script src="../assets/config.js" defer></script>
+<script src="../assets/main.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="site-head">
+  <div class="wrap">
+    <a class="brand" href="./"><img src="../assets/logo.svg" alt="" width="28" height="28">Scribiva</a>
+    <nav class="nav" aria-label="Page sections">
+      <a href="#how">How it works</a>
+      <a href="#features">Features</a>
+      <a href="#compat">Compatibility</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#download">Download</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <a class="lang-switch" href="../" hreflang="zh-CN" lang="zh-CN">简体中文</a>
+  </div>
+</header>
+
+<main id="main">
+<section class="hero" aria-labelledby="hero-title">
+  <div class="wrap">
+    <div>
+      <h1 id="hero-title">Press a hotkey, speak, and the words land at your cursor.</h1>
+      <p class="lede">Scribiva is voice dictation for Windows and Linux. In Obsidian, your browser, a document or your IDE, press the hotkey once to start and again to stop. The transcribed, cleaned-up text is inserted where you were writing.</p>
+      <div class="actions">
+        <a class="btn" href="#download">Download for Windows / Linux</a>
+        <a class="btn ghost" href="#pricing">See pricing</a>
+      </div>
+      <p class="hero-note">Includes a monthly free allowance. Speech is processed in the cloud on Scribiva servers in the USA. <a href="#privacy">See how your data is handled</a>.</p>
+    </div>
+
+    <figure class="editor" aria-labelledby="demo-cap">
+      <div class="editor-bar" aria-hidden="true">
+        <span class="dots"><i></i><i></i><i></i></span>
+        <span>weekly-notes.md · Obsidian Live Preview</span>
+      </div>
+      <div class="editor-body">
+        <p><span class="md-sym">## </span><span class="md-h">This week</span></p>
+        <p><span class="md-sym">- </span>Login flow merged</p>
+        <p data-demo-text><span class="dictated"><span class="md-sym">- </span>Raise the timeout in <code>config.yaml</code> from 30 to 60 seconds</span><span class="caret" aria-hidden="true"></span></p>
+      </div>
+      <p class="spoken">What you said: <q>um, bullet, raise the timeout in config dot yaml from thirty to sixty seconds</q></p>
+      <div class="hud" data-state="done" role="status">
+        <span class="sig" aria-hidden="true"></span><span class="hud-label">Inserted at cursor</span>
+      </div>
+      <figcaption id="demo-cap" class="sr-only">Illustration: dictating a list item into an Obsidian note. Scribiva drops the filler word, turns “bullet” into a Markdown list item, keeps the file name and numbers, and inserts the line at the cursor.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section id="how" aria-labelledby="how-title">
+  <div class="wrap">
+    <div class="section-head">
+      <h2 id="how-title">One dictation, four steps</h2>
+      <p>Day to day you never open the main window. A tray icon and a small overlay that doesn’t steal focus are all you need.</p>
+    </div>
+    <ol class="steps">
+      <li><h3>Put your cursor in a text field</h3><p>Any supported editor: notes, documents, email, browser text boxes.</p></li>
+      <li><h3>Press the hotkey and speak</h3><p>The overlay shows “Recording” and a timer. The hotkey is customizable.</p></li>
+      <li><h3>Press it again to stop</h3><p>Scribiva notes the target window and starts transcribing and correcting.</p></li>
+      <li><h3>Text appears at the cursor</h3><p>Before inserting, it checks the target window is unchanged. If it changed, the text is copied for you to paste.</p></li>
+    </ol>
+  </div>
+</section>
+
+<section id="features" aria-labelledby="features-title">
+  <div class="wrap">
+    <div class="section-head">
+      <h2 id="features-title">Speak casually, get text you can use</h2>
+    </div>
+    <dl class="features">
+      <div>
+        <dt>Three writing modes</dt>
+        <dd>
+          <ul class="modes">
+            <li><b>Raw</b><span>Word-for-word transcript, no language-model edits.</span></li>
+            <li><b>Standard</b><span>The default. Adds punctuation, removes filler words, fixes clear grammar mistakes, keeps your meaning.</span></li>
+            <li><b>Polished</b><span>Smoother written style. May change wording, so give it a read.</span></li>
+          </ul>
+        </dd>
+      </div>
+      <div>
+        <dt>Protected content</dt>
+        <dd><p>Code, commands, file paths, URLs, email addresses and Markdown structure stay character-for-character. Numbers keep their value; only formatting like “half past three” to “3:30” may change. If correction fails, you get the raw transcript.</p></dd>
+      </div>
+      <div>
+        <dt>Personal dictionary</dt>
+        <dd><p>Add names, product names and code identifiers. Recognition and correction both respect them. Your dictionary is stored with your account and can be exported or deleted.</p></dd>
+      </div>
+      <div>
+        <dt>Spoken formatting</dt>
+        <dd><p>Say “new line”, “new paragraph” or “bullet” (in Chinese: 换行, 新段落, 列表项). Fixed rules turn them into line breaks, blank lines and Markdown lists. You can switch this off in settings.</p></dd>
+      </div>
+      <div>
+        <dt>No phantom text from silence</dt>
+        <dd><p>Made-up phrases that speech models sometimes produce from silence or noise, like “thanks for watching”, are filtered. Suspicious results go to the recovery area instead of being inserted.</p></dd>
+      </div>
+      <div>
+        <dt>No wrong-window pastes, no auto-send</dt>
+        <dd><p>If Scribiva can’t confirm the target window, it copies the text to the clipboard instead of pasting. It never presses Enter, so it won’t send messages or run commands. Terminal windows are copy-only by default.</p></dd>
+      </div>
+      <div>
+        <dt>Tested with Obsidian</dt>
+        <dd><p>Live Preview and Source Mode are a dedicated test target, covering Markdown, line breaks and undo. No Obsidian plugin required.</p></dd>
+      </div>
+      <div>
+        <dt>Your text is kept</dt>
+        <dd><p>If inserting fails or the network drops, your latest text stays on your computer, ready to copy, retry or discard.</p></dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+<section id="languages" aria-labelledby="languages-title">
+  <div class="wrap">
+    <div class="section-head">
+      <h2 id="languages-title">20 speech languages</h2>
+      <p>Detected automatically or set by hand. Scribiva transcribes in the language you speak; it does not translate. Chinese output can be Simplified or Traditional.</p>
+    </div>
+    <ul class="langs">
+      <li><span>English</span><code>en</code></li>
+      <li><span lang="zh">中文（普通话）</span><code>zh</code></li>
+      <li><span lang="ja">日本語</span><code>ja</code></li>
+      <li><span lang="ko">한국어</span><code>ko</code></li>
+      <li><span lang="es">Español</span><code>es</code></li>
+      <li><span lang="fr">Français</span><code>fr</code></li>
+      <li><span lang="de">Deutsch</span><code>de</code></li>
+      <li><span lang="pt">Português</span><code>pt</code></li>
+      <li><span lang="it">Italiano</span><code>it</code></li>
+      <li><span lang="ru">Русский</span><code>ru</code></li>
+      <li><span lang="ar" dir="rtl">العربية</span><code>ar</code></li>
+      <li><span lang="hi">हिन्दी</span><code>hi</code></li>
+      <li><span lang="tr">Türkçe</span><code>tr</code></li>
+      <li><span lang="nl">Nederlands</span><code>nl</code></li>
+      <li><span lang="pl">Polski</span><code>pl</code></li>
+      <li><span lang="id">Bahasa Indonesia</span><code>id</code></li>
+      <li><span lang="vi">Tiếng Việt</span><code>vi</code></li>
+      <li><span lang="th">ไทย</span><code>th</code></li>
+      <li><span lang="sv">Svenska</span><code>sv</code></li>
+      <li><span lang="uk">Українська</span><code>uk</code></li>
+    </ul>
+    <p class="note">These are the languages you can speak, not the app’s interface languages. At launch the interface is available in English and Simplified Chinese. Auto-detect works best when you stick to one language per dictation; accuracy for mixing languages within a sentence varies by combination, with Chinese–English mixing as a priority test case.</p>
+  </div>
+</section>
+
+<section id="compat" aria-labelledby="compat-title">
+  <div class="wrap">
+    <div class="section-head">
+      <h2 id="compat-title">Compatibility and known limits</h2>
+      <p>Every environment below is still in testing and marked Beta. Final test results will be published here at release. “Auto-paste” means Scribiva confirmed the target window and wrote the text in. “Copy only” means the text goes to your clipboard and you press <kbd>Ctrl</kbd>+<kbd>V</kbd>.</p>
+    </div>
+    <table class="compat">
+      <caption class="sr-only">Environments Scribiva is being tested on</caption>
+      <thead>
+        <tr><th scope="col">Environment</th><th scope="col">Insertion</th><th scope="col">Status</th><th scope="col">Notes</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th scope="row">Windows 11 x64</th>
+          <td data-label="Insertion"><span class="mode-paste">Auto-paste</span></td>
+          <td data-label="Status"><span class="badge">Beta / in testing</span></td>
+          <td data-label="Notes">Apps running with normal user rights.</td>
+        </tr>
+        <tr>
+          <th scope="row">Ubuntu 24.04 / 26.04, GNOME Wayland</th>
+          <td data-label="Insertion"><span class="mode-paste">Auto-paste with extension</span></td>
+          <td data-label="Status"><span class="badge">Beta / in testing</span></td>
+          <td data-label="Notes">Requires the Scribiva GNOME extension to confirm the focused window. Without it, copy only.</td>
+        </tr>
+        <tr>
+          <th scope="row">KDE Plasma Wayland</th>
+          <td data-label="Insertion"><span class="mode-copy">Copy only</span></td>
+          <td data-label="Status"><span class="badge">Beta / in testing</span></td>
+          <td data-label="Notes">This version copies to the clipboard only.</td>
+        </tr>
+        <tr>
+          <th scope="row">X11 desktops (e.g. Linux Mint Cinnamon)</th>
+          <td data-label="Insertion"><span class="mode-paste">Auto-paste</span></td>
+          <td data-label="Status"><span class="badge">Beta / in testing</span></td>
+          <td data-label="Notes">Reads the active window through system APIs.</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="limits">
+      <div>
+        <h3>Where Scribiva won’t type</h3>
+        <ul>
+          <li>Windows running as administrator</li>
+          <li>Password fields</li>
+          <li>The lock screen</li>
+          <li>Remote desktop sessions</li>
+        </ul>
+      </div>
+      <div>
+        <h3>Also worth knowing</h3>
+        <ul>
+          <li>No macOS or mobile version yet.</li>
+          <li>Not every Linux distribution or Wayland compositor is supported.</li>
+          <li>Requires an internet connection; there is no offline recognition.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="privacy" aria-labelledby="privacy-title">
+  <div class="wrap">
+    <div class="section-head">
+      <h2 id="privacy-title">How your voice is processed</h2>
+      <p>Scribiva is not an offline tool. Audio from every dictation is uploaded for cloud processing. Here is the full path.</p>
+    </div>
+    <dl class="features">
+      <div>
+        <dt>Where: the USA</dt>
+        <dd><p>Audio goes to Scribiva servers in the USA, which use Groq for speech recognition and text editing. The app never connects to Groq directly. For users in mainland China, this is a cross-border data transfer.</p></dd>
+      </div>
+      <div>
+        <dt>How long it’s kept</dt>
+        <dd><p>Audio is processed in memory and not stored. Result text is kept on the server for up to 15 minutes so you can recover it after a network drop.</p></dd>
+      </div>
+      <div>
+        <dt>Recording only when you ask</dt>
+        <dd><p>There is no always-on microphone. The overlay is visible while recording, and cancelling a recording means nothing is uploaded.</p></dd>
+      </div>
+      <div>
+        <dt>Delete any time</dt>
+        <dd><p>Delete your data from the account page or run <code>scribiva service delete --confirm</code>. Billing records are kept as financial regulations require. See the <a href="../privacy.html#en">privacy policy</a>.</p></dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+<section id="pricing" aria-labelledby="pricing-title">
+  <div class="wrap">
+    <div class="section-head">
+      <h2 id="pricing-title">Pricing</h2>
+      <p>The free allowance resets every calendar month. Cancel Pro any time; when it ends you’re back on Free and your account stays active.</p>
+    </div>
+    <!-- Pricing pending approval (待定价确认): placeholder values. Edit ../assets/config.js -->
+    <div class="plans">
+      <div class="plan">
+        <h3>Free</h3>
+        <p class="price"><span data-cfg="free_quota">30 min / month</span></p>
+        <p>Sign up to use it. Resets monthly.</p>
+        <ul>
+          <li>All 20 speech languages</li>
+          <li>All three writing modes and the personal dictionary</li>
+          <li>Works on Windows and Linux</li>
+        </ul>
+      </div>
+      <div class="plan">
+        <h3>Pro</h3>
+        <p class="price"><span data-cfg="price_monthly">$8 / month</span><br><small>or <span data-cfg="price_yearly">$69 / year</span></small></p>
+        <p>Monthly allowance: <span data-cfg="pro_quota">[Pro monthly quota TBD]</span></p>
+        <ul>
+          <li>Everything in Free</li>
+          <li>Pay with Stripe Checkout; available payment methods are shown at checkout</li>
+          <li>Cancel any time in the Stripe billing portal; access continues to the end of the period</li>
+        </ul>
+      </div>
+    </div>
+    <p class="note">Prices in USD; the checkout page shows the final price. Upgrade from Account &amp; Billing in the app. Payment methods available in mainland China depend on what Stripe Checkout offers. See the <a href="../refund.html#en">refund and cancellation policy</a>.</p>
+  </div>
+</section>
+
+<section id="download" aria-labelledby="download-title">
+  <div class="wrap">
+    <div class="section-head">
+      <h2 id="download-title">Download</h2>
+      <p>Windows and Linux versions are released together. Version <span data-cfg="version">[版本号 / version]</span>.</p>
+    </div>
+    <div class="downloads">
+      <div class="dl">
+        <h3><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 5.5 10 4.5v7H3zM11 4.3 21 3v8.5H11zM3 12.5h7v7l-7-1zM11 12.5h10V21l-10-1.4z"/></svg>Windows</h3>
+        <p class="meta">Windows 11 x64 · <code>.exe</code> installer</p>
+        <span class="btn" role="link" aria-disabled="true" data-dl="windows" data-ready-label="Download Windows installer">Download Windows installer</span>
+        <span class="state" data-dl-state>Coming soon</span>
+        <dl class="hash">
+          <dt>SHA-256</dt>
+          <dd><code data-cfg="windows_sha256">[SHA-256 待发布 / pending]</code></dd>
+          <dt>Verify in PowerShell</dt>
+          <dd><pre class="cmd">Get-FileHash .\Scribiva-Setup.exe -Algorithm SHA256</pre></dd>
+        </dl>
+      </div>
+      <div class="dl">
+        <h3><svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2" d="M4 7h16v12H4zM4 7l2-3h12l2 3M9 11h6"/></svg>Linux</h3>
+        <p class="meta">Ubuntu, Linux Mint · <code>.deb</code> package</p>
+        <span class="btn" role="link" aria-disabled="true" data-dl="linux_deb" data-ready-label="Download .deb package">Download .deb package</span>
+        <span class="state" data-dl-state>Coming soon</span>
+        <dl class="hash">
+          <dt>SHA-256</dt>
+          <dd><code data-cfg="linux_deb_sha256">[SHA-256 待发布 / pending]</code></dd>
+          <dt>Verify in a terminal</dt>
+          <dd><pre class="cmd">sha256sum scribiva_*.deb</pre></dd>
+        </dl>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="faq" aria-labelledby="faq-title">
+  <div class="wrap">
+    <div class="section-head">
+      <h2 id="faq-title">Questions</h2>
+    </div>
+    <div class="faq">
+      <details>
+        <summary>Does it work offline?</summary>
+        <div><p>No. Recognition and correction run in the cloud, so you need a connection. When you’re offline Scribiva says so clearly and doesn’t interfere with your system input method.</p></div>
+      </details>
+      <details>
+        <summary>Why does it sometimes copy instead of pasting?</summary>
+        <div><p>Scribiva only types for you when it can confirm the target window hasn’t changed. If you switched windows while it was processing, or the system doesn’t expose the focused window (GNOME Wayland without the extension, KDE Wayland today), it copies the text so it never lands in the wrong place.</p></div>
+      </details>
+      <details>
+        <summary>Will it send messages or run commands for me?</summary>
+        <div><p>No. Scribiva never presses Enter, never submits forms and never acts on instructions in your speech. Terminal windows are copy-only by default.</p></div>
+      </details>
+      <details>
+        <summary>Do I need an Obsidian plugin?</summary>
+        <div><p>No. Put your cursor in Live Preview or Source Mode. Reading View isn’t editable, so Scribiva tells you and keeps the text.</p></div>
+      </details>
+      <details>
+        <summary>Will it translate what I say into English?</summary>
+        <div><p>No. Speak Japanese and you get Japanese; speak Chinese and you get Chinese. Scribiva is not a translator.</p></div>
+      </details>
+      <details>
+        <summary>What happens when the free allowance runs out?</summary>
+        <div><p>Before you start recording, Scribiva shows how much time is left this month and when it resets. If one recording goes past what’s left, that recording is still processed in full. After that, wait for the monthly reset or upgrade to Pro.</p></div>
+      </details>
+      <details>
+        <summary>Does it work in mainland China?</summary>
+        <div><p>The site, downloads and app only connect to Scribiva servers in the USA and don’t rely on other overseas resources. Because speech is processed in the USA, using Scribiva means your data is transferred across borders; please read the privacy notice before first use. Cross-border connections may be slower.</p></div>
+      </details>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer class="site-foot">
+  <div class="wrap">
+    <p>© Scribiva · Contact: <a data-cfg-mailto href="mailto:support@[域名]">support@[域名]</a></p>
+    <nav aria-label="Footer">
+      <ul>
+        <li><a href="../privacy.html#en">Privacy policy</a></li>
+        <li><a href="../terms.html#en">Terms of service</a></li>
+        <li><a href="../refund.html#en">Refunds and cancellation</a></li>
+        <li><a href="../" hreflang="zh-CN" lang="zh-CN">简体中文</a></li>
+      </ul>
+    </nav>
+  </div>
+</footer>
+</body>
+</html>
