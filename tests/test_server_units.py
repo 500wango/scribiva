@@ -359,7 +359,8 @@ class ProviderTests(unittest.TestCase):
                 return self.body
 
         self.assertEqual(FakeOpen(b'{"text":" hi "}').transcribe(
-            b'x', filename='a.wav', content_type='audio/wav', language='auto'), 'hi')
+            b'x', filename='a.wav', content_type='audio/wav', language='auto'),
+            {'text': 'hi', 'language': None, 'segments': []})
         with self.assertRaises(ProviderError) as empty:
             FakeOpen(b'{"text":"  "}').transcribe(
                 b'x', filename='a.wav', content_type='audio/wav', language='auto')
@@ -427,8 +428,36 @@ class StripeEventTests(unittest.TestCase):
         }
         self.assertTrue(apply_event(self.conn, event)['applied'])
         sub = db.get_subscription(self.conn, self.user['id'])
-        self.assertEqual(sub['status'], 'incomplete')
+        self.assertEqual(sub['status'], 'inactive')
+        self.assertEqual(sub['stripe_customer_id'], 'cus_1')
         self.assertEqual(db.effective_plan(sub), 'free')
+
+    def test_late_checkout_event_does_not_downgrade_active_subscription(self):
+        active = self._subscription_event('customer.subscription.created')
+        self.assertTrue(apply_event(self.conn, active)['applied'])
+        late = {'type': 'checkout.session.completed', 'data': {'object': {
+            'customer': 'cus_1', 'subscription': 'sub_1',
+            'metadata': {'user_id': self.user['id']}}}}
+        apply_event(self.conn, late)
+        self.assertEqual(db.effective_plan(db.get_subscription(self.conn, self.user['id'])), 'pro')
+
+    def test_out_of_order_subscription_events_keep_newest(self):
+        newer = {**self._subscription_event('customer.subscription.updated', 'canceled'),
+                 'created': 2000}
+        older = {**self._subscription_event('customer.subscription.updated', 'active'),
+                 'created': 1000}
+        self.assertTrue(apply_event(self.conn, newer)['applied'])
+        result = apply_event(self.conn, older)
+        self.assertEqual(result, {'applied': False, 'reason': 'stale event'})
+        self.assertEqual(db.get_subscription(self.conn, self.user['id'])['status'], 'canceled')
+
+    def test_period_end_from_subscription_items(self):
+        event = self._subscription_event('customer.subscription.created')
+        del event['data']['object']['current_period_end']
+        event['data']['object']['items'] = {'data': [{'current_period_end': 1_900_000_000}]}
+        apply_event(self.conn, event)
+        sub = db.get_subscription(self.conn, self.user['id'])
+        self.assertTrue(sub['current_period_end'].startswith('2030-'))
 
     def test_invoice_paid_is_not_an_entitlement_source(self):
         event = {

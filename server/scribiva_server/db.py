@@ -5,6 +5,7 @@ semantics: ``BEGIN IMMEDIATE`` serialises concurrent write transactions, and the
 unique ``(user_id, client_job_id)`` constraint makes retries idempotent.
 """
 from __future__ import annotations
+import hashlib
 import json
 import os
 import secrets
@@ -85,7 +86,38 @@ CREATE TABLE IF NOT EXISTS processed_webhook_events (
   provider_event_id TEXT PRIMARY KEY,
   received_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS user_dictionary (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  terms_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- Device authorization (FR-019). device_code and magic-link tokens are stored
+-- only as SHA-256 hashes; user_code is short-lived and shown to the user.
+CREATE TABLE IF NOT EXISTS device_authorizations (
+  device_code_hash TEXT PRIMARY KEY,
+  user_code TEXT NOT NULL UNIQUE,
+  client_name TEXT,
+  user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  approved_at TEXT,
+  consumed_at TEXT,
+  last_poll_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS magic_links (
+  token_hash TEXT PRIMARY KEY,
+  email TEXT NOT NULL,
+  user_code TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  used_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_magic_links_email ON magic_links(email, created_at);
 """
+SCHEMA_VERSION = 2
 
 
 class DbConflict(RuntimeError):
@@ -107,6 +139,13 @@ def iso(value: datetime | None = None) -> str:
 def period_start(value: datetime | None = None) -> str:
     current = (value or utcnow()).astimezone(timezone.utc)
     return current.replace(day=1, hour=0, minute=0, second=0, microsecond=0).date().isoformat()
+
+
+def period_reset(value: datetime | None = None) -> str:
+    """UTC instant at which the current monthly free quota resets."""
+    current = (value or utcnow()).astimezone(timezone.utc)
+    year, month = (current.year + 1, 1) if current.month == 12 else (current.year, current.month + 1)
+    return datetime(year, month, 1, tzinfo=timezone.utc).isoformat(timespec='seconds')
 
 
 def connect(path: Path) -> sqlite3.Connection:
@@ -135,11 +174,38 @@ def connect(path: Path) -> sqlite3.Connection:
     return conn
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Forward-only, idempotent schema migrations."""
+    version = conn.execute('PRAGMA user_version').fetchone()[0]
+    if version < 2:
+        # v2: separate the charged seconds from the reserved duration so the
+        # month-end grace (charge up to the limit) does not lose information.
+        columns = {row['name'] for row in conn.execute('PRAGMA table_info(dictation_jobs)')}
+        if 'charge_seconds' not in columns:
+            conn.execute('ALTER TABLE dictation_jobs ADD COLUMN charge_seconds INTEGER')
+        if 'suspected_hallucination' not in columns:
+            conn.execute('ALTER TABLE dictation_jobs ADD COLUMN '
+                         'suspected_hallucination INTEGER NOT NULL DEFAULT 0')
+        sub_columns = {row['name'] for row in conn.execute('PRAGMA table_info(subscriptions)')}
+        if 'last_event_created' not in sub_columns:
+            conn.execute('ALTER TABLE subscriptions ADD COLUMN last_event_created INTEGER')
+        user_columns = {row['name'] for row in conn.execute('PRAGMA table_info(users)')}
+        if 'email_hash' not in user_columns:
+            conn.execute('ALTER TABLE users ADD COLUMN email_hash TEXT')
+        for row in conn.execute('SELECT id, email FROM users WHERE email IS NOT NULL '
+                                'AND email_hash IS NULL').fetchall():
+            conn.execute('UPDATE users SET email_hash = ? WHERE id = ?',
+                         (email_hash(row['email']), row['id']))
+        conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_hash '
+                     'ON users(email_hash)')
+    conn.execute(f'PRAGMA user_version = {SCHEMA_VERSION}')
+
+
 def init_db(path: Path) -> None:
     conn = connect(path)
     try:
         conn.executescript(SCHEMA)
-        conn.execute('PRAGMA user_version = 1')
+        _migrate(conn)
     finally:
         conn.close()
     try:
@@ -160,13 +226,166 @@ def transaction(conn: sqlite3.Connection, immediate: bool = False):
         conn.execute('COMMIT')
 
 
+def normalise_email(email: str) -> str:
+    return email.strip().lower()
+
+
+def email_hash(email: str) -> str:
+    return hashlib.sha256(normalise_email(email).encode('utf-8')).hexdigest()
+
+
+def _user_email_hash(conn: sqlite3.Connection, user_id: str) -> str | None:
+    row = conn.execute('SELECT email, email_hash FROM users WHERE id = ?', (user_id,)).fetchone()
+    if not row:
+        return None
+    return row['email_hash'] or (email_hash(row['email']) if row['email'] else None)
+
+
 def create_user(conn: sqlite3.Connection, email: str | None) -> dict:
     user_id = 'usr_' + secrets.token_hex(12)
-    email = email.strip().lower() if email else None
+    email = normalise_email(email) if email else None
     with transaction(conn, immediate=True):
-        conn.execute('INSERT INTO users (id, email, created_at) VALUES (?, ?, ?)',
-                     (user_id, email, iso()))
+        conn.execute('INSERT INTO users (id, email, email_hash, created_at) VALUES (?, ?, ?, ?)',
+                     (user_id, email, email_hash(email) if email else None, iso()))
     return {'id': user_id, 'email': email}
+
+
+def get_or_create_user_by_email(conn: sqlite3.Connection, email: str) -> dict:
+    """One account per email. A deleted account is reactivated, keeping its
+    usage ledger, so deletion cannot be used to reset the monthly free tier."""
+    email = normalise_email(email)
+    digest = email_hash(email)
+    with transaction(conn, immediate=True):
+        row = conn.execute('SELECT id FROM users WHERE email_hash = ?', (digest,)).fetchone()
+        if row:
+            conn.execute('UPDATE users SET email = ?, deletion_requested_at = NULL WHERE id = ?',
+                         (email, row['id']))
+            return {'id': row['id'], 'email': email, 'created': False}
+        user_id = 'usr_' + secrets.token_hex(12)
+        conn.execute('INSERT INTO users (id, email, email_hash, created_at) VALUES (?, ?, ?, ?)',
+                     (user_id, email, digest, iso()))
+        return {'id': user_id, 'email': email, 'created': True}
+
+
+# ------------------------------------------------------------- dictionary
+
+def get_dictionary(conn: sqlite3.Connection, user_id: str) -> list[str]:
+    row = conn.execute('SELECT terms_json FROM user_dictionary WHERE user_id = ?',
+                       (user_id,)).fetchone()
+    if not row:
+        return []
+    try:
+        terms = json.loads(row['terms_json'])
+    except ValueError:
+        return []
+    return [t for t in terms if isinstance(t, str)] if isinstance(terms, list) else []
+
+
+def set_dictionary(conn: sqlite3.Connection, user_id: str, terms: list[str]) -> None:
+    with transaction(conn, immediate=True):
+        conn.execute(
+            """INSERT INTO user_dictionary (user_id, terms_json, updated_at) VALUES (?, ?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET terms_json=excluded.terms_json,
+                                                  updated_at=excluded.updated_at""",
+            (user_id, json.dumps(terms, ensure_ascii=False), iso()))
+
+
+# ----------------------------------------------------- device authorization
+
+def secret_hash(value: str) -> str:
+    return hashlib.sha256(value.encode('utf-8')).hexdigest()
+
+
+def create_device_authorization(conn: sqlite3.Connection, *, device_code: str,
+                                user_code: str, client_name: str | None,
+                                ttl_seconds: int) -> None:
+    now = utcnow()
+    with transaction(conn, immediate=True):
+        conn.execute('DELETE FROM device_authorizations WHERE expires_at < ?',
+                     (iso(now - timedelta(days=1)),))
+        conn.execute(
+            """INSERT INTO device_authorizations
+               (device_code_hash, user_code, client_name, created_at, expires_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (secret_hash(device_code), user_code, client_name, iso(now),
+             iso(now + timedelta(seconds=ttl_seconds))))
+
+
+def find_pending_user_code(conn: sqlite3.Connection, user_code: str) -> dict | None:
+    row = conn.execute(
+        """SELECT * FROM device_authorizations WHERE user_code = ? AND approved_at IS NULL
+           AND consumed_at IS NULL AND expires_at > ?""", (user_code, iso())).fetchone()
+    return dict(row) if row else None
+
+
+def approve_device(conn: sqlite3.Connection, user_code: str, user_id: str) -> bool:
+    with transaction(conn, immediate=True):
+        cursor = conn.execute(
+            """UPDATE device_authorizations SET user_id = ?, approved_at = ?
+               WHERE user_code = ? AND approved_at IS NULL AND consumed_at IS NULL
+                 AND expires_at > ?""", (user_id, iso(), user_code, iso()))
+        return cursor.rowcount == 1
+
+
+def poll_device(conn: sqlite3.Connection, device_code: str, min_interval: int) -> tuple[str, str | None]:
+    """Return (status, user_id); status in pending|slow_down|expired|invalid|approved."""
+    digest = secret_hash(device_code)
+    now = utcnow()
+    with transaction(conn, immediate=True):
+        row = conn.execute('SELECT * FROM device_authorizations WHERE device_code_hash = ?',
+                           (digest,)).fetchone()
+        if not row or row['consumed_at']:
+            return 'invalid', None
+        if datetime.fromisoformat(row['expires_at']) <= now:
+            return 'expired', None
+        last = row['last_poll_at']
+        conn.execute('UPDATE device_authorizations SET last_poll_at = ? WHERE device_code_hash = ?',
+                     (iso(now), digest))
+        if not row['approved_at']:
+            if last and (now - datetime.fromisoformat(last)).total_seconds() < min_interval - 0.5:
+                return 'slow_down', None
+            return 'pending', None
+        conn.execute('UPDATE device_authorizations SET consumed_at = ? WHERE device_code_hash = ?',
+                     (iso(now), digest))
+        return 'approved', row['user_id']
+
+
+def create_magic_link(conn: sqlite3.Connection, *, token: str, email: str, user_code: str,
+                      ttl_seconds: int) -> None:
+    now = utcnow()
+    with transaction(conn, immediate=True):
+        conn.execute('DELETE FROM magic_links WHERE expires_at < ?',
+                     (iso(now - timedelta(days=1)),))
+        conn.execute(
+            """INSERT INTO magic_links (token_hash, email, user_code, created_at, expires_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (secret_hash(token), normalise_email(email), user_code, iso(now),
+             iso(now + timedelta(seconds=ttl_seconds))))
+
+
+def recent_magic_links(conn: sqlite3.Connection, email: str, window_seconds: int) -> int:
+    cutoff = iso(utcnow() - timedelta(seconds=window_seconds))
+    return conn.execute('SELECT COUNT(*) AS n FROM magic_links WHERE email = ? AND created_at > ?',
+                        (normalise_email(email), cutoff)).fetchone()['n']
+
+
+def peek_magic_link(conn: sqlite3.Connection, token: str) -> dict | None:
+    row = conn.execute(
+        'SELECT * FROM magic_links WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?',
+        (secret_hash(token), iso())).fetchone()
+    return dict(row) if row else None
+
+
+def consume_magic_link(conn: sqlite3.Connection, token: str) -> dict | None:
+    with transaction(conn, immediate=True):
+        row = conn.execute(
+            'SELECT * FROM magic_links WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?',
+            (secret_hash(token), iso())).fetchone()
+        if not row:
+            return None
+        conn.execute('UPDATE magic_links SET used_at = ? WHERE token_hash = ?',
+                     (iso(), secret_hash(token)))
+        return dict(row)
 
 
 def find_user(conn: sqlite3.Connection, identifier: str) -> sqlite3.Row | None:
@@ -190,26 +409,53 @@ def effective_plan(subscription: dict) -> str:
     return 'pro' if subscription.get('status') in ('active', 'trialing') else 'free'
 
 
+def link_stripe_customer(conn: sqlite3.Connection, user_id: str, *,
+                         customer_id: str | None, subscription_id: str | None) -> None:
+    """Record Stripe ids without touching entitlement status."""
+    with transaction(conn, immediate=True):
+        conn.execute(
+            """INSERT INTO subscriptions (user_id, status, plan_code, stripe_customer_id,
+                                          stripe_subscription_id, updated_at)
+               VALUES (?, 'inactive', 'pro', ?, ?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET
+                 stripe_customer_id=COALESCE(excluded.stripe_customer_id, subscriptions.stripe_customer_id),
+                 stripe_subscription_id=COALESCE(excluded.stripe_subscription_id, subscriptions.stripe_subscription_id),
+                 updated_at=excluded.updated_at""",
+            (user_id, customer_id, subscription_id, iso()))
+
+
 def set_subscription(conn: sqlite3.Connection, user_id: str, *, status: str,
                      plan_code: str = 'pro', customer_id: str | None = None,
                      subscription_id: str | None = None,
-                     current_period_end: str | None = None) -> None:
+                     current_period_end: str | None = None,
+                     event_created: int | None = None) -> bool:
+    """Upsert subscription state. With ``event_created`` (Stripe event time),
+    an event older than the last applied one is ignored: Stripe does not
+    guarantee delivery order. Returns False when ignored."""
     with transaction(conn, immediate=True):
+        if event_created is not None:
+            row = conn.execute('SELECT last_event_created FROM subscriptions WHERE user_id = ?',
+                               (user_id,)).fetchone()
+            if row and row['last_event_created'] is not None \
+                    and row['last_event_created'] > event_created:
+                return False
         conn.execute(
             """INSERT INTO subscriptions
                (user_id, status, plan_code, stripe_customer_id, stripe_subscription_id,
-                current_period_end, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)
+                current_period_end, last_event_created, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(user_id) DO UPDATE SET
                  status=excluded.status,
                  plan_code=excluded.plan_code,
                  stripe_customer_id=COALESCE(excluded.stripe_customer_id, subscriptions.stripe_customer_id),
                  stripe_subscription_id=COALESCE(excluded.stripe_subscription_id, subscriptions.stripe_subscription_id),
                  current_period_end=COALESCE(excluded.current_period_end, subscriptions.current_period_end),
+                 last_event_created=COALESCE(excluded.last_event_created, subscriptions.last_event_created),
                  updated_at=excluded.updated_at""",
             (user_id, status, plan_code, customer_id, subscription_id,
-             current_period_end, iso()),
+             current_period_end, event_created, iso()),
         )
+        return True
 
 
 def usage(conn: sqlite3.Connection, user_id: str) -> dict:
@@ -220,12 +466,12 @@ def usage(conn: sqlite3.Connection, user_id: str) -> dict:
         (user_id, period),
     ).fetchone()['total']
     reserved = conn.execute(
-        """SELECT COALESCE(SUM(billable_seconds), 0) AS total FROM dictation_jobs
-           WHERE user_id = ? AND state = 'processing'""",
+        """SELECT COALESCE(SUM(COALESCE(charge_seconds, billable_seconds)), 0) AS total
+           FROM dictation_jobs WHERE user_id = ? AND state = 'processing'""",
         (user_id,),
     ).fetchone()['total']
     return {'period_start': period, 'used_seconds': int(used),
-            'reserved_seconds': int(reserved)}
+            'reserved_seconds': int(reserved), 'resets_at': period_reset()}
 
 
 def _expire_stale_jobs(conn: sqlite3.Connection, timeout_seconds: int) -> int:
@@ -244,10 +490,12 @@ def _expire_stale_jobs(conn: sqlite3.Connection, timeout_seconds: int) -> int:
 def create_or_get_job(conn: sqlite3.Connection, *, user_id: str, client_job_id: str,
                       billable_seconds: int, language: str, grammar_mode: str,
                       client_version: str, timeout_seconds: int,
-                      limit_seconds: int) -> tuple[dict, bool]:
+                      limit_seconds: int, grace_seconds: int = 0) -> tuple[dict, bool]:
     """Reserve quota and create a job, or return the existing idempotent job.
 
-    Raises DbConflict for concurrency or quota violations.
+    Month-end grace: while some quota remains, one recording that overshoots the
+    limit by at most ``grace_seconds`` is accepted and charged only up to the
+    limit. Raises DbConflict for concurrency or quota violations.
     """
     with transaction(conn, immediate=True):
         _expire_stale_jobs(conn, timeout_seconds)
@@ -264,17 +512,22 @@ def create_or_get_job(conn: sqlite3.Connection, *, user_id: str, client_job_id: 
         if processing:
             raise DbConflict('BUSY', 'Another dictation is still processing', retryable=True)
         used = usage(conn, user_id)['used_seconds']
-        if used + billable_seconds > limit_seconds:
+        remaining = limit_seconds - used
+        if billable_seconds <= remaining:
+            charge = billable_seconds
+        elif remaining > 0 and billable_seconds <= remaining + grace_seconds:
+            charge = remaining
+        else:
             raise DbConflict('QUOTA_EXCEEDED',
                              'Current plan usage limit reached', retryable=False)
         job_id = 'job_' + secrets.token_hex(12)
         now = iso()
         conn.execute(
             """INSERT INTO dictation_jobs
-               (id, user_id, client_job_id, state, billable_seconds, language_code,
-                grammar_mode, client_version, created_at, updated_at)
-               VALUES (?, ?, ?, 'processing', ?, ?, ?, ?, ?, ?)""",
-            (job_id, user_id, client_job_id, billable_seconds, language,
+               (id, user_id, client_job_id, state, billable_seconds, charge_seconds,
+                language_code, grammar_mode, client_version, created_at, updated_at)
+               VALUES (?, ?, ?, 'processing', ?, ?, ?, ?, ?, ?, ?)""",
+            (job_id, user_id, client_job_id, billable_seconds, charge, language,
              grammar_mode, client_version, now, now),
         )
         row = conn.execute('SELECT * FROM dictation_jobs WHERE id = ?', (job_id,)).fetchone()
@@ -300,7 +553,8 @@ def job_is_expired(job: dict, now: datetime | None = None) -> bool:
 def complete_job(conn: sqlite3.Connection, *, job_id: str, user_id: str,
                  duration_ms: int, raw_text: str, output_text: str,
                  detected_language: str | None, warning: str | None,
-                 processing: dict, result_ttl_seconds: int) -> bool:
+                 processing: dict, result_ttl_seconds: int,
+                 suspected_hallucination: bool = False) -> bool:
     """Commit usage and store the result only while the job is still processing."""
     with transaction(conn, immediate=True):
         job = conn.execute('SELECT * FROM dictation_jobs WHERE id = ? AND user_id = ?',
@@ -313,18 +567,19 @@ def complete_job(conn: sqlite3.Connection, *, job_id: str, user_id: str,
             """UPDATE dictation_jobs
                SET state='completed', audio_duration_ms=?, raw_text=?, output_text=?,
                    detected_language=?, warning=?, processing_json=?,
-                   result_expires_at=?, updated_at=?
+                   result_expires_at=?, updated_at=?, suspected_hallucination=?
                WHERE id = ? AND user_id = ?""",
             (duration_ms, raw_text, output_text, detected_language, warning,
              json.dumps(processing, ensure_ascii=False), expires, iso(now),
-             job_id, user_id),
+             1 if suspected_hallucination else 0, job_id, user_id),
         )
         conn.execute(
             """INSERT OR IGNORE INTO usage_ledger
                (id, user_id, job_id, period_start, billable_seconds, event_type, created_at)
                VALUES (?, ?, ?, ?, ?, 'debit', ?)""",
-            ('led_' + secrets.token_hex(12), user_id, job_id,
-             period_start(now), job['billable_seconds'], iso(now)),
+            ('led_' + secrets.token_hex(12), user_id, job_id, period_start(now),
+             job['charge_seconds'] if job['charge_seconds'] is not None
+             else job['billable_seconds'], iso(now)),
         )
         return True
 
@@ -399,8 +654,14 @@ def delete_user_data(conn: sqlite3.Connection, user_id: str) -> dict:
     with transaction(conn, immediate=True):
         jobs = conn.execute('DELETE FROM dictation_jobs WHERE user_id = ?', (user_id,)).rowcount
         tokens = conn.execute('DELETE FROM access_tokens WHERE user_id = ?', (user_id,)).rowcount
-        conn.execute('UPDATE users SET email = NULL, deletion_requested_at = ? WHERE id = ?',
-                     (iso(), user_id))
+        conn.execute('DELETE FROM user_dictionary WHERE user_id = ?', (user_id,))
+        conn.execute('DELETE FROM device_authorizations WHERE user_id = ?', (user_id,))
+        # The email is replaced by a one-way hash so the same address cannot
+        # re-register to obtain a second monthly free quota (FR-019).
+        conn.execute(
+            """UPDATE users SET email = NULL, email_hash = COALESCE(email_hash, ?),
+                      deletion_requested_at = ? WHERE id = ?""",
+            (_user_email_hash(conn, user_id), iso(), user_id))
     return {'deleted_jobs': jobs, 'revoked_tokens': tokens,
             'retained': 'usage ledger and subscription status (billing metadata only)'}
 

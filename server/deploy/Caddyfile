@@ -1,0 +1,33 @@
+# Caddy terminates TLS (automatic certificates) and forwards to the loopback API.
+api.example.com {
+	encode gzip
+	request_body {
+		max_size 26MB
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	reverse_proxy 127.0.0.1:8787 {
+		# The API trusts X-Forwarded-For only from loopback (this proxy).
+		header_up X-Forwarded-For {remote_host}
+		transport http {
+			read_timeout 150s
+			write_timeout 150s
+		}
+	}
+}
+
+# Landing page: static files from landing/ (FR-014).
+example.com, www.example.com {
+	root * /opt/scribiva/landing
+	encode gzip
+	file_server
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'; base-uri 'self'"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+}

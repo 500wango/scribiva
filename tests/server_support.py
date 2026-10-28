@@ -53,14 +53,15 @@ class FakeProvider:
         self.transcribe_error: Exception | None = None
         self.correct_error: Exception | None = None
         self.transcribe_result = 'hello world'
+        self.transcribe_segments = []
         self.correct_result = ('hello world, edited.', None)
         self.block: threading.Event | None = None
         self.started = threading.Event()
 
-    def transcribe(self, data, *, filename, content_type, language, timeout=None):
+    def transcribe(self, data, *, filename, content_type, language, timeout=None, prompt=''):
         self.transcribe_calls.append({'bytes': len(data), 'filename': filename,
                                       'content_type': content_type,
-                                      'language': language})
+                                      'language': language, 'prompt': prompt})
         self.started.set()
         if self.block is not None:
             if not self.block.wait(timeout=5):
@@ -68,10 +69,14 @@ class FakeProvider:
                                     status=504, retryable=True)
         if self.transcribe_error:
             raise self.transcribe_error
-        return self.transcribe_result
+        if isinstance(self.transcribe_result, dict):
+            return self.transcribe_result
+        return {'text': self.transcribe_result, 'language': None,
+                'segments': self.transcribe_segments}
 
-    def correct(self, text, *, mode, language):
-        self.correct_calls.append({'text': text, 'mode': mode, 'language': language})
+    def correct(self, text, *, mode, language, terms=None):
+        self.correct_calls.append({'text': text, 'mode': mode, 'language': language,
+                                   'terms': list(terms or [])})
         if self.correct_error:
             raise self.correct_error
         return self.correct_result

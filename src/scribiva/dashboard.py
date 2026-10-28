@@ -107,7 +107,8 @@ def make_server(token: str | None = None):
                 if route == '/api/settings':
                     accepted = {'language', 'mode', 'asr_model', 'auto_insert',
                                 'restore_text_clipboard', 'mic_node', 'max_record_seconds',
-                                'delete_audio_on_success', 'service_url'}
+                                'delete_audio_on_success', 'service_url', 'output_script',
+                                'dictation_commands', 'insert_without_focus_check'}
                     if not isinstance(value, dict) or set(value) - accepted:
                         raise ValueError('Unsupported setting')
                     save_config(value)

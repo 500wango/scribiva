@@ -1,0 +1,18 @@
+[Unit]
+Description=Scribiva purge expired transcripts and back up the database
+
+[Service]
+Type=oneshot
+User=scribiva
+Group=scribiva
+EnvironmentFile=/etc/scribiva/scribiva.env
+Environment=PYTHONPATH=/opt/scribiva/server
+UMask=0077
+ExecStart=/opt/scribiva/venv/bin/python -m scribiva_server purge
+ExecStart=/bin/sh -c 'exec /opt/scribiva/venv/bin/python -m scribiva_server backup --output /var/backups/scribiva/scribiva-$(date -u +%%Y%%m%%dT%%H%%M%%SZ).sqlite3'
+ExecStart=/usr/bin/find /var/backups/scribiva -name 'scribiva-*.sqlite3' -mtime +14 -delete
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/scribiva /var/backups/scribiva

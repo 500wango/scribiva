@@ -1,6 +1,6 @@
 # Scribiva API — Groq 代理与额度骨架
 
-**状态：`0.2.0-alpha.1` · 可运行骨架，不是生产服务。**
+**状态：v1.0 开发中 · 单实例生产形态（ADR-011）。部署见 [`deploy/README.md`](deploy/README.md)。**
 
 服务端只使用 Python 3.12 标准库与 SQLite，目的不是替代最终后端选型，而是先把**密钥不落客户端、账户鉴权、额度预留、幂等、失败不计费、Stripe Webhook 验签**这些不可延后的边界做成可测试的实现。v1.0 沿用本实现，单实例部署在美国服务器，在反向代理终止 TLS 并做定时备份（ADR-011）；只有需要多实例时才迁移 PostgreSQL 和共享限流。
 
@@ -12,13 +12,13 @@ export SCRIBIVA_DB="$PWD/server/data/scribiva.sqlite3"
 export PYTHONPATH=server
 
 python3 -m scribiva_server init-db
-python3 -m scribiva_server create-user --email you@example.com   # 只显示一次 token
+python3 -m scribiva_server create-user --email you@example.com   # 开发用：直接签发 token
 python3 -m scribiva_server serve --host 127.0.0.1 --port 8787
 ```
 
 `serve` 默认只允许回环地址。若确实需要监听其它地址，必须显式设置 `SCRIBIVA_ALLOW_REMOTE=1`，并且应在 TLS 反向代理之后运行；服务本身不终止 TLS。
 
-客户端登录（token 通过隐藏输入读取，保存为本机 `0600` 文件）：
+客户端登录：默认打开浏览器走邮箱魔法链接（需配置 SMTP 或 `SCRIBIVA_MAIL_OUTBOX`）；加 `--token` 则粘贴 `create-user` 打印的 token。token 保存为本机 `0600` 文件：
 
 ```bash
 scribiva service login --url http://127.0.0.1:8787
@@ -47,8 +47,13 @@ scribiva service logout
 | POST | `/v1/billing/portal-session` | Bearer | 创建 Stripe Billing Portal |
 | POST | `/v1/webhooks/stripe` | 签名 | Stripe Webhook；只接受验签事件 |
 | DELETE | `/v1/me/data` | Bearer | 删除转写、任务与 token；需 `{"confirm":"DELETE"}` |
+| POST | `/v1/auth/device` | 无 | 开始设备登录，返回 `device_code` / `user_code` / 登录页地址 |
+| POST | `/v1/auth/device/token` | 设备码 | 轮询登录结果，成功时返回 `scr_` token |
+| POST | `/v1/auth/magic-link` | 无 | 向邮箱发送一次性登录链接（总是 202，不暴露邮箱是否存在） |
+| GET/POST | `/login`、`/auth/verify` | 无 | 浏览器登录页与邮件链接确认页（确认必须 POST） |
+| GET/PUT | `/v1/me/dictionary` | Bearer | 读取 / 整体替换个人词典 |
 
-上传字段：`audio`（文件）、`language`、`grammar_mode`（`raw/standard/polished`）、`client_job_id`、`client_version`。`Idempotency-Key` 请求头必填，且必须与 `client_job_id` 一致。示例：
+上传字段：`audio`（WAV/FLAC/WebM 文件）、`language`、`grammar_mode`（`raw/standard/polished`）、`client_job_id`、`client_version`，可选 `output_script`（`hans`/`hant`）与 `dictation_commands`（`1`/`0`）。完整契约见 `docs/05-API-AND-DATA.md` §8。`Idempotency-Key` 请求头必填，且必须与 `client_job_id` 一致。示例：
 
 ```bash
 curl -sS http://127.0.0.1:8787/v1/dictations \
@@ -61,7 +66,7 @@ curl -sS http://127.0.0.1:8787/v1/dictations \
   -F client_version=0.2.0-alpha.1
 ```
 
-成功响应包含 `raw_text`、`output_text`、`billing.charged_audio_seconds`、`billing.remaining_seconds`、`warnings`。错误统一为：
+成功响应包含 `raw_text`、`output_text`、`suspected_hallucination`、`billing.charged_audio_seconds`、`billing.remaining_seconds`、`billing.resets_at`、`warnings`。`suspected_hallucination` 为 true 时客户端不得自动插入。错误统一为：
 
 ```json
 {"error": {"code": "QUOTA_EXCEEDED", "message": "...", "retryable": false, "request_id": "req_..."}}
@@ -70,6 +75,7 @@ curl -sS http://127.0.0.1:8787/v1/dictations \
 ## 额度与幂等语义
 
 - 免费套餐默认 `1800` 秒/UTC 自然月；Pro 默认 `36000` 秒/UTC 自然月，可用环境变量调整。
+- 月末宽限：免费层还有剩余额度时，超出部分不超过 `SCRIBIVA_GRACE_SECONDS`（默认 180）的一段录音照常处理，只扣到 0；之后返回 `402`。
 - 音频时长由服务端从 WAV 头或 `ffprobe` 计算，**不信任客户端声明**；按秒向上取整，每段至少 1 秒。
 - 请求在调用 Groq 前先以事务创建 `processing` 任务并预留额度；只有成功写入结果时才记录 `usage_ledger` 扣费。识别失败、取消、超时都不会扣费。
 - `(user_id, client_job_id)` 唯一。相同 key 重放返回已完成结果或处理中状态，不会重复计费；失败任务用相同 key 重试返回 `409 IDEMPOTENCY_CONFLICT`，需换新 key。
@@ -107,6 +113,11 @@ python3 -m scribiva_server grant-pro --user you@example.com --days 30
 | `GROQ_API_KEY` | 空 | 必填；服务端持有，不返回客户端 |
 | `SCRIBIVA_FREE_SECONDS` | `1800` | 免费月额度 |
 | `SCRIBIVA_PRO_SECONDS` | `36000` | Pro 月额度 |
+| `SCRIBIVA_GRACE_SECONDS` | `180` | 免费层月末宽限（秒） |
+| `SCRIBIVA_ASR_MODEL` | `whisper-large-v3-turbo` | Groq 语音识别模型 |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_TLS` / `SMTP_USERNAME` / `SMTP_PASSWORD` / `SMTP_FROM` | 空 / `587` / `starttls` | 魔法链接发信 |
+| `SCRIBIVA_MAIL_OUTBOX` | 空 | 仅开发：把邮件写成本地 `.eml` 文件而不发送 |
+| `SCRIBIVA_DEVICE_CODE_TTL_SECONDS` / `SCRIBIVA_MAGIC_LINK_TTL_SECONDS` | `900` | 登录码与邮件链接有效期 |
 | `SCRIBIVA_MAX_AUDIO_BYTES` | `25000000` | 上传字节上限 |
 | `SCRIBIVA_MAX_AUDIO_SECONDS` | `180` | 单段音频秒数上限 |
 | `SCRIBIVA_RESULT_TTL_SECONDS` | `900` | 结果文本保留时间 |
@@ -127,7 +138,7 @@ python3 -m scribiva_server grant-pro --user you@example.com --days 30
 ## 已知非生产边界
 
 - 单进程 SQLite：适合单实例开发和早期部署，不适合多副本、高并发或跨区域。
-- 没有邮箱验证、密码找回、OAuth、管理员 Web 控制台、审计导出或密钥轮换流程。
+- 登录只支持邮箱魔法链接（无密码、无 OAuth）；没有管理员 Web 控制台、审计导出或密钥轮换流程。
 - 限流与任务状态在进程内/单库中；崩溃恢复依赖超时回收，不依赖队列。
 - Stripe 流程没有处理所有事件类型（如退款、争议、税务），也未提供前端支付页面。
 - 未实现对象存储、音频留存开关、内容审核、滥用检测或多租户隔离。

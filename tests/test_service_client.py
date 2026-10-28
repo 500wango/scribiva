@@ -8,7 +8,8 @@ from scribiva import providers
 from server_support import ServerTestCase, wav_bytes
 
 CONFIG = {
-    'language': 'en', 'mode': 'standard', 'asr_model': 'whisper-large-v3',
+    'language': 'en', 'mode': 'standard', 'asr_model': 'whisper-large-v3-turbo',
+    'output_script': '', 'dictation_commands': True, 'insert_without_focus_check': False,
     'grammar_model': 'openai/gpt-oss-20b', 'auto_insert': True,
     'restore_text_clipboard': False, 'mic_node': 'alsa_input.fake',
     'max_record_seconds': 180, 'asr_prompt': '', 'proxy_url': '',
@@ -186,7 +187,7 @@ class PortalWithoutCustomerTests(ServerTestCase, unittest.TestCase):
 
 class ServiceQuotaTests(ServerTestCase, unittest.TestCase):
     def setUp(self):
-        self.start_server(free_seconds=1)
+        self.start_server(free_seconds=1, grace_seconds=0)
 
     def test_quota_error_is_mapped(self):
         path = Path(self.temp.name) / 'audio.wav'

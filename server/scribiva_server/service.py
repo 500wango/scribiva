@@ -8,7 +8,7 @@ import threading
 import time
 from collections import defaultdict, deque
 
-from . import __version__, audio, auth, db, stripe as stripe_mod
+from . import __version__, audio, auth, db, login, postprocess, stripe as stripe_mod
 from .config import Settings
 from .provider import GroqProvider, ProviderError
 
@@ -71,6 +71,9 @@ class DictationService:
         self.provider = provider or GroqProvider(settings)
         self.stripe = stripe_mod.StripeClient(settings)
         self.rate_limiter = RateLimiter(settings.rate_limit_per_minute)
+        # Unauthenticated login endpoints are limited per client address.
+        self.login_limiter = RateLimiter(20)
+        self.login = login.LoginService(settings)
         db.init_db(settings.db_path)
 
     def _connect(self):
@@ -132,6 +135,7 @@ class DictationService:
 
     def _limits(self) -> dict:
         return {
+            'grace_seconds': self.settings.grace_seconds,
             'monthly_free_seconds': self.settings.free_seconds,
             'monthly_pro_seconds': self.settings.pro_seconds,
             'max_audio_seconds': self.settings.max_audio_seconds,
@@ -147,6 +151,8 @@ class DictationService:
             'reserved_seconds': usage['reserved_seconds'],
             'limit_seconds': limit,
             'remaining_seconds': remaining,
+            'resets_at': usage['resets_at'],
+            'grace_seconds': self.settings.grace_seconds,
             'plan': plan,
         }
 
@@ -159,6 +165,10 @@ class DictationService:
             'features': {
                 'dictation': True,
                 'grammar': True,
+                'device_login': self.settings.mail_configured,
+                'dictionary': True,
+                'dictation_commands': True,
+                'output_script': True,
                 'billing': self.settings.billing_configured,
                 'stripe_webhooks': self.settings.webhook_configured,
             },
@@ -170,6 +180,8 @@ class DictationService:
                 'languages': sorted(LANGUAGES),
             },
             'privacy': {
+                'processing_region': 'United States',
+                'processors': ['Groq (speech recognition and text editing)'],
                 'audio_retention': 'processed in memory; not stored by this server',
                 'text_retention_seconds': self.settings.result_ttl_seconds,
                 'server_holds_provider_key': bool(self.settings.groq_api_key),
@@ -204,6 +216,11 @@ class DictationService:
             raise ApiError(400, 'INVALID_GRAMMAR_MODE', 'grammar_mode is invalid')
         mode = {'smart': 'standard', 'polish': 'polished'}.get(mode, mode)
         client_version = (fields.get('client_version') or 'unknown').strip()[:64]
+        script = (fields.get('output_script') or '').strip().lower()
+        if script not in postprocess.SCRIPTS:
+            raise ApiError(400, 'INVALID_OUTPUT_SCRIPT', 'output_script must be hans or hant')
+        commands = (fields.get('dictation_commands') or '1').strip() not in ('0', 'false', 'off')
+        options = {'script': script, 'commands': commands}
 
         upload = files.get('audio')
         if not upload or not upload.get('data'):
@@ -229,7 +246,9 @@ class DictationService:
                     grammar_mode=mode, client_version=client_version,
                     timeout_seconds=self.settings.job_timeout_seconds,
                     limit_seconds=limit,
+                    grace_seconds=self.settings.grace_seconds if plan == 'free' else 0,
                 )
+                terms = db.get_dictionary(conn, user['id'])
             except db.DbConflict as exc:
                 status = 402 if exc.code == 'QUOTA_EXCEEDED' else 409
                 raise ApiError(status, exc.code, exc.message,
@@ -240,7 +259,8 @@ class DictationService:
         if not created:
             return self._existing_job(user, job)
 
-        return self._run_job(user, job, upload, language, mode, probed, request_id)
+        return self._run_job(user, job, upload, language, mode, probed, request_id,
+                             terms=terms, options=options)
 
     def _existing_job(self, user: dict, job: dict) -> tuple[int, dict]:
         state = job['state']
@@ -266,16 +286,30 @@ class DictationService:
                        extra={'job_id': job['id']})
 
     def _run_job(self, user: dict, job: dict, upload: dict, language: str,
-                 mode: str, probed: dict, request_id: str) -> tuple[int, dict]:
+                 mode: str, probed: dict, request_id: str, *,
+                 terms: list[str] | None = None,
+                 options: dict | None = None) -> tuple[int, dict]:
+        terms = terms or []
+        options = options or {}
+        warnings: list[str] = []
         asr_started = time.monotonic()
         try:
-            raw = self.provider.transcribe(
+            asr = self.provider.transcribe(
                 upload['data'],
                 filename=upload.get('filename') or 'audio.wav',
                 content_type=upload.get('content_type') or 'application/octet-stream',
                 language=language,
                 timeout=self.settings.job_timeout_seconds,
+                prompt=postprocess.asr_prompt(terms),
             )
+            if isinstance(asr, str):  # older adapters return plain text
+                asr = {'text': asr, 'language': None, 'segments': []}
+            raw = asr['text']
+            detected = asr.get('language')
+            suspected = postprocess.is_suspected_hallucination(raw, asr.get('segments'))
+            if suspected:
+                warnings.append('SUSPECTED_HALLUCINATION: transcript looks like phantom '
+                                'text from silence or noise')
             asr_ms = int((time.monotonic() - asr_started) * 1000)
             conn = self._connect()
             try:
@@ -285,11 +319,22 @@ class DictationService:
                 conn.close()
 
             grammar_started = time.monotonic()
-            if mode == 'raw':
-                output, warning = raw, None
+            # Commands are applied before the LLM; the structure they create is
+            # then protected by textguard's Markdown marker check (FR-016).
+            source = postprocess.apply_commands(raw) if options.get('commands', True) else raw
+            if mode == 'raw' or suspected:
+                output, warning = source, None
             else:
                 output, warning = self.provider.correct(
-                    raw, mode=mode, language=language)
+                    source, mode=mode, language=language, terms=terms)
+            if warning:
+                warnings.append(warning)
+            script = options.get('script') or ''
+            if script and (language == 'zh' or (language == 'auto'
+                           and (detected in ('zh', 'chinese') or postprocess.looks_chinese(output)))):
+                output, converted = postprocess.convert_script(output, script)
+                if not converted:
+                    warnings.append('SCRIPT_CONVERSION_UNAVAILABLE: OpenCC is not installed')
             grammar_ms = int((time.monotonic() - grammar_started) * 1000)
         except ApiError:
             conn = self._connect()
@@ -328,10 +373,11 @@ class DictationService:
                 duration_ms=probed['duration_ms'], raw_text=raw, output_text=output,
                 # The JSON ASR format does not report a detected language. Do not
                 # echo the requested code as if it were detected.
-                detected_language=None,
-                warning=warning,
+                detected_language=detected,
+                warning='\n'.join(warnings) or None,
                 processing={'asr_ms': asr_ms, 'grammar_ms': grammar_ms},
                 result_ttl_seconds=self.settings.result_ttl_seconds,
+                suspected_hallucination=suspected,
             )
             if not committed:
                 raise ApiError(409, 'JOB_CANCELLED', 'Job was cancelled before completion')
@@ -345,7 +391,7 @@ class DictationService:
         plan = db.effective_plan(subscription)
         limit = self.settings.limit_for(plan)
         usage = db.usage(conn, user['id'])
-        warnings = [job['warning']] if job.get('warning') else []
+        warnings = [w for w in (job.get('warning') or '').split('\n') if w]
         try:
             processing = json.loads(job.get('processing_json') or '{}')
         except ValueError:
@@ -360,11 +406,16 @@ class DictationService:
             'language': job.get('language_code'),
             'detected_language': job.get('detected_language'),
             'grammar_mode': job.get('grammar_mode'),
+            'suspected_hallucination': bool(job.get('suspected_hallucination')),
             'billing': {
                 'plan': plan,
-                'charged_audio_seconds': job.get('billable_seconds', 0),
+                'charged_audio_seconds': (job.get('charge_seconds')
+                                          if job.get('charge_seconds') is not None
+                                          else job.get('billable_seconds', 0)),
+                'audio_seconds': job.get('billable_seconds', 0),
                 'remaining_seconds': remaining,
                 'remaining_free_seconds': remaining if plan == 'free' else None,
+                'resets_at': usage['resets_at'],
             },
             'warnings': warnings,
             'processing': processing,
@@ -409,6 +460,65 @@ class DictationService:
         finally:
             conn.close()
         return {'jobs': jobs}
+
+    # -------------------------------------------------------------- dictionary
+
+    def _dictionary_payload(self, terms: list[str]) -> dict:
+        return {'terms': terms, 'max_terms': postprocess.MAX_TERMS,
+                'max_term_length': postprocess.MAX_TERM_LENGTH}
+
+    def get_dictionary(self, user: dict) -> dict:
+        conn = self._connect()
+        try:
+            return self._dictionary_payload(db.get_dictionary(conn, user['id']))
+        finally:
+            conn.close()
+
+    def put_dictionary(self, user: dict, body: dict) -> dict:
+        try:
+            terms = postprocess.clean_terms(body.get('terms') if isinstance(body, dict) else None)
+        except postprocess.DictionaryError as exc:
+            raise ApiError(400, 'INVALID_DICTIONARY', str(exc)) from exc
+        conn = self._connect()
+        try:
+            db.set_dictionary(conn, user['id'], terms)
+        finally:
+            conn.close()
+        return self._dictionary_payload(terms)
+
+    # ------------------------------------------------------------------ login
+
+    def _login_call(self, client: str, fn, *args):
+        retry = self.login_limiter.check('login:' + client)
+        if retry:
+            raise ApiError(429, 'RATE_LIMITED', 'Too many login requests',
+                           retryable=True, retry_after=retry)
+        try:
+            return fn(*args)
+        except login.LoginError as exc:
+            raise ApiError(exc.status, exc.code, exc.message,
+                           retryable=exc.code in ('AUTHORIZATION_PENDING', 'SLOW_DOWN',
+                                                  'MAIL_UNAVAILABLE')) from exc
+
+    def device_start(self, body: dict, client: str) -> dict:
+        name = body.get('client_name') if isinstance(body, dict) else None
+        return self._login_call(client, self.login.start_device,
+                                name if isinstance(name, str) else None)
+
+    def device_token(self, body: dict) -> dict:
+        # Polling is limited by the interval rule itself; no per-IP limiter so
+        # several devices behind one NAT can log in at the same time.
+        try:
+            return self.login.poll(body.get('device_code') if isinstance(body, dict) else '')
+        except login.LoginError as exc:
+            raise ApiError(exc.status, exc.code, exc.message,
+                           retryable=exc.code in ('AUTHORIZATION_PENDING', 'SLOW_DOWN')) from exc
+
+    def magic_link(self, body: dict, client: str) -> dict:
+        body = body if isinstance(body, dict) else {}
+        self._login_call(client, self.login.request_link,
+                         str(body.get('email') or ''), str(body.get('user_code') or ''))
+        return {'status': 'sent_if_valid'}
 
     # ----------------------------------------------------------------- billing
 

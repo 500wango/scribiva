@@ -64,6 +64,18 @@ print(json.dumps([
 ]))
 MOCK
 chmod +x "$TMP/bin/pw-dump"
+# Mocked GNOME extension on the session bus: same focused editor every call.
+cat > "$TMP/bin/gdbus" <<'MOCK'
+#!/bin/sh
+[ -e "$HOME/no-extension" ] && exit 1
+case "$*" in
+  *GetFocus*) echo "('md.obsidian.desktop', 'obsidian', uint64 42, uint32 4242)" ;;
+  *NameHasOwner*) echo "(true,)" ;;
+  *) echo "()" ;;
+esac
+MOCK
+chmod +x "$TMP/bin/gdbus"
+export XDG_SESSION_TYPE=wayland
 bash "$ROOT/scripts/install-ubuntu.sh" >/dev/null
 "$HOME/.local/bin/scribiva" devices --json | grep 'alsa_input.test' >/dev/null
 "$HOME/.local/bin/scribiva" set language zh >/dev/null
@@ -86,4 +98,18 @@ fi
 if find "$HOME/.local/state/scribiva/audio" -name 'record-*wav' | grep -q .; then
   echo 'Audio not deleted on success' >&2; exit 1
 fi
-echo 'Simulated full workflow (hotkey -> WAV -> ASR -> grammar -> paste): PASS'
+# Without the extension the focus is unknown: copy only, never paste (ADR-012).
+touch "$HOME/no-extension"
+rm -f "$HOME/eitype.log" "$HOME/paste.txt"
+"$HOME/.local/bin/scribiva" toggle | grep recording >/dev/null
+sleep 1.3
+"$HOME/.local/bin/scribiva" toggle | grep processing >/dev/null
+for i in $(seq 1 60); do
+  if "$HOME/.local/bin/scribiva" status | grep -q '"last_result": "clipboard_only"'; then break; fi
+  sleep .2
+done
+"$HOME/.local/bin/scribiva" status | grep -q '"last_result": "clipboard_only"' \
+  || { "$HOME/.local/bin/scribiva" status; echo 'Expected clipboard_only without focus info' >&2; exit 1; }
+[ ! -e "$HOME/eitype.log" ] || { echo 'Pasted although focus was unknown' >&2; exit 1; }
+grep -q 'Scribiva' "$HOME/paste.txt"
+echo 'Simulated full workflow (hotkey -> WAV -> ASR -> grammar -> focus check -> paste / copy-only): PASS'

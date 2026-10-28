@@ -197,3 +197,48 @@ sequenceDiagram
 - 账户删除：按产品隐私政策、适用合同和合法保留要求执行；用户界面披露不可立即删除的数据类别。
 
 相关：[安全](07-SECURITY-PRIVACY.md) · [指标](11-METRICS-ECONOMICS.md)。
+
+## 8. v1.0 实现契约（2026-10-28，以 `server/scribiva_server/` 为准）
+
+本节是服务端、Linux 客户端与 Windows 客户端共同遵守的接口约定；字段名与上文草案冲突时以本节为准。
+
+### 8.1 设备登录（FR-019）
+
+1. `POST /v1/auth/device`，body `{"client_name": "scribiva-windows"}`（可选）→ `200`：
+   `{"device_code": "<43 字符，机密>", "user_code": "ABCD-EFGH", "verification_uri": "https://<host>/login", "verification_uri_complete": "https://<host>/login?code=ABCD-EFGH", "expires_in": 900, "interval": 3}`
+2. 客户端用系统浏览器打开 `verification_uri_complete`，用户在网页输入邮箱；服务端发送魔法链接（`POST /v1/auth/magic-link`，body `{"email","user_code"}`，始终返回 `202`，防止枚举邮箱）。
+3. 用户点击邮件链接 `GET /auth/verify?token=…` → 确认页 → 表单 `POST /auth/verify` 完成授权（两步是为了防止邮件安全扫描器预取链接时误授权）。
+4. 客户端每 `interval` 秒轮询 `POST /v1/auth/device/token`，body `{"device_code"}`：
+   - `200` `{"access_token": "scr_…", "token_type": "Bearer", "expires_at": "<ISO>"}`
+   - `400` 错误码：`AUTHORIZATION_PENDING`（继续轮询）、`SLOW_DOWN`（间隔 +5 秒）、`EXPIRED_TOKEN`（重新开始）、`INVALID_DEVICE_CODE`
+
+同一邮箱只对应一个账户；删除数据后用同一邮箱重新注册会复用原账户的当月用量，不会再次获得当月免费额度。
+
+### 8.2 个人词典（FR-018）
+
+- `GET /v1/me/dictionary` → `{"terms": ["Kubernetes", "Scribiva"], "max_terms": 200, "max_term_length": 64}`
+- `PUT /v1/me/dictionary`，body `{"terms": [...]}`，整体替换，去重保序 → 同上结构
+- 服务端在每次听写时自动使用该账户的词典，客户端无需上传。
+
+### 8.3 听写请求与响应补充
+
+`POST /v1/dictations` 新增可选表单字段：
+
+| 字段 | 取值 | 说明 |
+|---|---|---|
+| `output_script` | `hans` / `hant` / 空 | 仅 `zh` 或自动检测为中文时生效（FR-003） |
+| `dictation_commands` | `1`（默认）/ `0` | 口述格式命令开关（FR-016） |
+
+音频格式：`audio/wav`、`audio/flac`、`audio/ogg`（Opus）、`audio/webm`。客户端优先上传 FLAC。
+
+响应新增：
+
+- `suspected_hallucination`（bool）：为 `true` 时客户端**不得自动插入**，只放入恢复区（FR-017）。
+- `warnings`：字符串数组，可能含 `GRAMMAR_SKIPPED`、`SUSPECTED_HALLUCINATION`、`SCRIPT_CONVERSION_UNAVAILABLE` 等前缀。
+- `billing.resets_at`：本计费周期结束时间（UTC ISO），客户端按本地时区显示。
+
+`GET /v1/me` 与 `GET /v1/me/usage` 的 `usage` 新增 `resets_at` 与 `grace_seconds`。
+
+### 8.4 月末宽限
+
+当 `used < limit` 且 `used + 本段时长 <= limit + grace_seconds` 时允许本段，扣费为 `min(本段时长, limit - used)`，即扣至 0；之后剩余为 0，下一段返回 `402 QUOTA_EXCEEDED`。`grace_seconds` 由 `SCRIBIVA_GRACE_SECONDS` 配置（默认 180）。

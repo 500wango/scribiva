@@ -48,10 +48,11 @@ class Settings:
     port: int = 8787
     groq_api_key: str = ''
     groq_base_url: str = 'https://api.groq.com/openai/v1'
-    asr_model: str = 'whisper-large-v3'
+    asr_model: str = 'whisper-large-v3-turbo'
     grammar_model: str = 'openai/gpt-oss-20b'
     free_seconds: int = 1800
     pro_seconds: int = 36000
+    grace_seconds: int = 180
     max_audio_bytes: int = 25_000_000
     max_audio_seconds: int = 180
     result_ttl_seconds: int = 900
@@ -64,6 +65,15 @@ class Settings:
     stripe_price_annual: str = ''
     public_base_url: str = ''
     allow_remote: bool = False
+    device_code_ttl_seconds: int = 900
+    magic_link_ttl_seconds: int = 900
+    smtp_host: str = ''
+    smtp_port: int = 587
+    smtp_username: str = ''
+    smtp_password: str = ''
+    smtp_from: str = ''
+    smtp_tls: str = 'starttls'
+    mail_outbox: Path | None = None
     max_request_bytes: int = field(init=False)
 
     def __post_init__(self):
@@ -79,10 +89,21 @@ class Settings:
             groq_api_key=os.environ.get('GROQ_API_KEY', '').strip(),
             groq_base_url=(os.environ.get('GROQ_BASE_URL', 'https://api.groq.com/openai/v1').strip()
                            or 'https://api.groq.com/openai/v1').rstrip('/'),
-            asr_model=os.environ.get('SCRIBIVA_ASR_MODEL', 'whisper-large-v3').strip(),
+            asr_model=os.environ.get('SCRIBIVA_ASR_MODEL', 'whisper-large-v3-turbo').strip(),
             grammar_model=os.environ.get('SCRIBIVA_GRAMMAR_MODEL', 'openai/gpt-oss-20b').strip(),
             free_seconds=_int('SCRIBIVA_FREE_SECONDS', 1800, 0),
             pro_seconds=_int('SCRIBIVA_PRO_SECONDS', 36000, 0),
+            grace_seconds=_int('SCRIBIVA_GRACE_SECONDS', 180, 0, 3600),
+            device_code_ttl_seconds=_int('SCRIBIVA_DEVICE_CODE_TTL_SECONDS', 900, 60, 3600),
+            magic_link_ttl_seconds=_int('SCRIBIVA_MAGIC_LINK_TTL_SECONDS', 900, 60, 3600),
+            smtp_host=os.environ.get('SMTP_HOST', '').strip(),
+            smtp_port=_int('SMTP_PORT', 587, 1, 65535),
+            smtp_username=os.environ.get('SMTP_USERNAME', '').strip(),
+            smtp_password=os.environ.get('SMTP_PASSWORD', ''),
+            smtp_from=os.environ.get('SMTP_FROM', '').strip(),
+            smtp_tls=(os.environ.get('SMTP_TLS', 'starttls').strip().lower() or 'starttls'),
+            mail_outbox=Path(os.environ['SCRIBIVA_MAIL_OUTBOX']).expanduser()
+            if os.environ.get('SCRIBIVA_MAIL_OUTBOX', '').strip() else None,
             max_audio_bytes=_int('SCRIBIVA_MAX_AUDIO_BYTES', 25_000_000, 4096),
             max_audio_seconds=_int('SCRIBIVA_MAX_AUDIO_SECONDS', 180, 1, 3600),
             result_ttl_seconds=_int('SCRIBIVA_RESULT_TTL_SECONDS', 900, 0),
@@ -100,6 +121,8 @@ class Settings:
             raise ConfigError('SCRIBIVA_PORT is out of range')
         if settings.db_path.suffix == '':
             raise ConfigError('SCRIBIVA_DB must point to a file')
+        if settings.smtp_tls not in ('starttls', 'ssl', 'none'):
+            raise ConfigError('SMTP_TLS must be starttls, ssl or none')
         return settings
 
     @property
@@ -109,6 +132,10 @@ class Settings:
     @property
     def webhook_configured(self) -> bool:
         return bool(self.stripe_webhook_secret)
+
+    @property
+    def mail_configured(self) -> bool:
+        return bool((self.smtp_host and self.smtp_from) or self.mail_outbox)
 
     def limit_for(self, plan: str) -> int:
         return self.pro_seconds if plan == 'pro' else self.free_seconds

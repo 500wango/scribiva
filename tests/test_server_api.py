@@ -45,7 +45,7 @@ class PublicAndAuthTests(ServerTestCase, unittest.TestCase):
         self.assertEqual(usage['remaining_seconds'], 1800)
 
     def test_method_not_allowed(self):
-        status, body, _ = self.request('PUT', '/v1/me')
+        status, body, _ = self.request('PATCH', '/v1/me')
         self.assertEqual(status, 405)
         self.assertEqual(body['error']['code'], 'METHOD_NOT_ALLOWED')
 
@@ -152,7 +152,7 @@ class DictationTests(ServerTestCase, unittest.TestCase):
     def test_quota_exceeded_does_not_call_provider(self):
         self.server.server_close()
         self.thread.join(timeout=2)
-        self.start_server(free_seconds=1)
+        self.start_server(free_seconds=1, grace_seconds=0)
         status, body, _ = self.dictation(audio=wav_bytes(1.5))
         self.assertEqual(status, 402)
         self.assertEqual(body['error']['code'], 'QUOTA_EXCEEDED')

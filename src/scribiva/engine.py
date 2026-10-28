@@ -11,7 +11,7 @@ import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from . import __version__, audio, devices, inject, providers
+from . import __version__, audio, devices, focus, inject, providers
 from .config import (AUDIO_DIR, DEFAULT, KEY_PATH, LAST_RAW_PATH, LATEST_PATH,
                      LOCK_PATH, LOG_PATH, MIC_PATH, ROOT_STATE, SERVICE_TOKEN_PATH,
                      STATE_PATH, _write_private, api_key, mic_node, read_config,
@@ -121,7 +121,11 @@ def toggle() -> str:
                 set_state({'phase': 'idle'})
                 notify('Too short', 'Speak for at least one second')
                 return 'too-short'
-            set_state({'phase': 'processing', 'id': job_id, 'file': str(path), 'started': current['started']})
+            # FR-005: the target is the window focused when recording stops.
+            target = focus.snapshot()
+            set_state({'phase': 'processing', 'id': job_id, 'file': str(path),
+                       'started': current['started'], 'focus': target})
+            focus.set_indicator('processing')
             launch_aux('worker', job_id)
             logger.info('recording_stopped job=%s duration=%.2f', job_id, duration)
             notify('Transcribing', 'Recording complete')
@@ -133,6 +137,7 @@ def toggle() -> str:
         set_state({'phase': 'recording', 'id': job_id, 'pid': pid,
                    'file': str(path), 'started': time.time()})
         launch_aux('watchdog', job_id)
+        focus.set_indicator('recording')
         logger.info('recording_started job=%s pid=%d', job_id, pid)
         notify('Recording', 'Press Ctrl+Alt+V again to stop')
         return 'recording'
@@ -166,6 +171,7 @@ def _recover_error(job_id: str, message: str, file: str | None):
             if current.get('last_warning'):
                 recovered['last_warning'] = current['last_warning']
             set_state(recovered)
+            focus.set_indicator('error')
     logger.warning('job_failed id=%s reason=%s', job_id, message[:180])
     notify('Error', message[:100])
 
@@ -185,11 +191,25 @@ def worker(job_id: str):
             raise RuntimeError('No meaningful audio signal detected')
         if quality['duration'] > config['max_record_seconds'] + 5:
             raise RuntimeError('Recording too long')
+        suspected = False
         if providers.service_configured(config):
-            result = providers.service_dictation(file, config, job_id=job_id)
+            # FR-017 / PRD §11.2: trim silence, then upload FLAC when possible.
+            # The retained WAV stays the source for retry.
+            try:
+                audio.trim_silence(file)
+            except (OSError, EOFError, ValueError) as exc:
+                logger.warning('trim_failed job=%s reason=%s', job_id, str(exc)[:120])
+            encoded = audio.encode_flac(file)
+            upload, mime = encoded if encoded else (file, 'audio/wav')
+            try:
+                result = providers.service_dictation(upload, config, job_id=job_id, mime=mime)
+            finally:
+                if encoded:
+                    encoded[0].unlink(missing_ok=True)
             raw = result['raw_text']
             edited = result['output_text']
             correction_warning = result.get('warning') or None
+            suspected = bool(result.get('suspected_hallucination'))
             billing = result.get('billing') or {}
             logger.info('service_billing id=%s job=%s charged=%s remaining=%s',
                         job_id, result.get('job_id'),
@@ -212,15 +232,12 @@ def worker(job_id: str):
                 return
             _write_private(LATEST_PATH, edited)
             _write_private(LAST_RAW_PATH, raw)
+            target = fresh.get('focus')
             set_state({'phase': 'injecting', 'id': job_id, 'file': str(file),
                        'last_warning': correction_warning or ''})
         if correction_warning:
             logger.warning('grammar_fallback job=%s reason=%s', job_id, correction_warning)
-        if config['auto_insert']:
-            result = inject.dispatch(edited, config['restore_text_clipboard'])
-        else:
-            inject.copy_text(edited)
-            result = 'clipboard_only'
+        result = deliver(edited, config, target, suspected)
         with locked():
             fresh = state()
             if fresh.get('id') == job_id and fresh.get('phase') == 'injecting':
@@ -228,10 +245,41 @@ def worker(job_id: str):
                            'last_warning': correction_warning or ''})
         if config['delete_audio_on_success']:
             file.unlink(missing_ok=True)
+        focus.set_indicator('idle')
         logger.info('job_finished id=%s output=%s characters=%d', job_id, result, len(edited))
-        notify('Complete', 'Paste dispatched (not verified)' if config['auto_insert'] else 'Text copied')
+        notify(*OUTCOME_MESSAGES.get(result, ('Complete', '')))
     except Exception as e:
         _recover_error(job_id, str(e), str(file))
+
+
+OUTCOME_MESSAGES = {
+    'dispatched_unverified': ('Complete', 'Paste dispatched (not verified)'),
+    'clipboard_only': ('Copied', 'Text is on the clipboard; paste it where you need it'),
+    'focus_changed': ('Not pasted', 'The window changed while processing; text copied instead'),
+    'suspected_noise': ('No clear speech', 'Result kept for review; run `scribiva last`'),
+}
+
+
+def deliver(text: str, config: dict, target: dict | None, suspected: bool) -> str:
+    """Choose paste vs copy (FR-005, FR-017, ADR-012). Returns the outcome."""
+    if suspected:
+        # Possible phantom text: keep it in recovery only; do not touch the clipboard.
+        return 'suspected_noise'
+    if not config['auto_insert']:
+        inject.copy_text(text)
+        return 'clipboard_only'
+    if target is None:
+        if config.get('insert_without_focus_check'):
+            return inject.dispatch(text, config['restore_text_clipboard'])
+        inject.copy_text(text)
+        return 'clipboard_only'
+    if not focus.same_target(target, focus.snapshot()):
+        inject.copy_text(text)
+        return 'focus_changed'
+    if focus.is_terminal(target):
+        inject.copy_text(text)
+        return 'clipboard_only'
+    return inject.dispatch(text, config['restore_text_clipboard'])
 
 
 def cancel():
@@ -253,6 +301,7 @@ def cancel():
         if phase != 'idle':
             set_state({'phase': 'idle', 'last_job': current.get('id', '')})
             logger.info('job_cancelled id=%s phase=%s', current.get('id', ''), phase)
+    focus.set_indicator('idle')
     notify('Cancelled')
 
 
@@ -367,6 +416,8 @@ def doctor() -> dict:
     except RuntimeError:
         eitype_path = None
     service_mode = bool(str(conf.get('service_url') or '').strip())
+    focus_target = focus.snapshot()
+    extension = focus.extension_available()
     has_service_token = False
     service_error = ''
     if service_mode:
@@ -416,6 +467,16 @@ def doctor() -> dict:
         _check(checks, 'microphone', 'ok', 'Active node: ' + mic)
     else:
         _check(checks, 'microphone', 'fail', mic_error or 'No microphone selected')
+
+    if focus_target is not None:
+        _check(checks, 'focus', 'ok', f"Focus guard active via {focus_target['source']}")
+    elif session == 'wayland' and 'GNOME' in desktop.upper():
+        _check(checks, 'focus', 'warn',
+               'Scribiva GNOME Shell extension not active; auto-insert falls back to copy-only'
+               + (' (focus check overridden by insert_without_focus_check)'
+                  if conf.get('insert_without_focus_check') else ''))
+    else:
+        _check(checks, 'focus', 'warn', 'Focused window cannot be verified; copy-only by default')
 
     if not commands['wl-copy']:
         _check(checks, 'clipboard', 'fail', 'wl-copy is missing (install wl-clipboard)')
@@ -494,6 +555,8 @@ def doctor() -> dict:
         'desktop': desktop,
         'commands': commands,
         'eitype': bool(eitype_path),
+        'focus_source': focus_target['source'] if focus_target else None,
+        'gnome_extension': extension,
         'eitype_path': eitype_path,
         'has_groq_key': has_key,
         'key_mode': key_mode,

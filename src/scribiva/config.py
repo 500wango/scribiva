@@ -31,10 +31,11 @@ LANGUAGES = {
 }
 MODES = {'raw', 'standard', 'polished'}
 ASR_MODELS = {'whisper-large-v3', 'whisper-large-v3-turbo'}
+OUTPUT_SCRIPTS = {'', 'hans', 'hant'}
 DEFAULT = {
     'language': 'auto',
     'mode': 'standard',
-    'asr_model': 'whisper-large-v3',
+    'asr_model': 'whisper-large-v3-turbo',
     'grammar_model': 'openai/gpt-oss-20b',
     'auto_insert': True,
     'restore_text_clipboard': True,
@@ -44,6 +45,10 @@ DEFAULT = {
     'proxy_url': '',
     'service_url': '',
     'delete_audio_on_success': True,
+    # v1.0 (FR-003, FR-016, ADR-012)
+    'output_script': '',
+    'dictation_commands': True,
+    'insert_without_focus_check': False,
 }
 
 SERVICE_TOKEN_RE = re.compile(r'^scr_[A-Za-z0-9_-]{20,120}$')
@@ -129,6 +134,8 @@ def read_config() -> dict:
         result['mode'] = 'standard'
     if result['asr_model'] not in ASR_MODELS:
         result['asr_model'] = DEFAULT['asr_model']
+    if result['output_script'] not in OUTPUT_SCRIPTS:
+        result['output_script'] = ''
     result['service_url'] = validate_service_url(result.get('service_url', ''))
     return result
 
@@ -148,7 +155,10 @@ def save_config(partial: dict) -> dict:
         raise ValueError('Unsupported ASR model')
     if not isinstance(new['max_record_seconds'], int) or not 5 <= new['max_record_seconds'] <= 600:
         raise ValueError('max_record_seconds must be 5..600')
-    for key in ('auto_insert', 'restore_text_clipboard', 'delete_audio_on_success'):
+    if new['output_script'] not in OUTPUT_SCRIPTS:
+        raise ValueError('output_script must be empty, hans or hant')
+    for key in ('auto_insert', 'restore_text_clipboard', 'delete_audio_on_success',
+                'dictation_commands', 'insert_without_focus_check'):
         if not isinstance(new[key], bool):
             raise ValueError(f'{key} must be boolean')
     for key in ('mic_node', 'asr_prompt', 'grammar_model', 'proxy_url', 'service_url'):

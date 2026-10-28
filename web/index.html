@@ -123,7 +123,11 @@
       <input id="service_url" type="url" placeholder="https://api.example.com" autocomplete="off" />
       <p class="note" id="service-note">·</p>
     </div>
+    <div class="field"><label for="output_script">中文输出字形</label><select id="output_script"></select></div>
+    <label class="check"><input type="checkbox" id="dictation_commands" /> 口述格式命令（“换行”“新段落”“列表项”）</label>
     <label class="check"><input type="checkbox" id="auto_insert" /> 识别完成后自动粘贴到光标处</label>
+    <label class="check"><input type="checkbox" id="insert_without_focus_check" /> 无法确认目标窗口时也自动粘贴（不推荐）</label>
+    <p class="note">默认只在确认目标窗口未变化时才粘贴；GNOME 需要安装 Scribiva 扩展。勾选上一项后，如果你在处理期间切换了窗口，文字可能被粘贴到错误的位置。终端窗口始终只复制。</p>
     <label class="check"><input type="checkbox" id="restore_text_clipboard" /> 尝试恢复原有纯文本剪贴板</label>
     <label class="check"><input type="checkbox" id="delete_audio_on_success" /> 成功后删除本地录音；失败时保留以便重试</label>
     <button class="btn secondary" id="save">保存设置</button>
@@ -180,7 +184,7 @@ const api=async(path,body)=>{
 let lastData={available:false,text:'',raw:''};
 let lastSignature='';
 let showRaw=false;
-let settings={language:'auto',mode:'standard',asr_model:'whisper-large-v3',auto_insert:true,restore_text_clipboard:true,delete_audio_on_success:true,mic_node:'',max_record_seconds:180,service_url:''};
+let settings={language:'auto',mode:'standard',asr_model:'whisper-large-v3-turbo',output_script:'',dictation_commands:true,insert_without_focus_check:false,auto_insert:true,restore_text_clipboard:true,delete_audio_on_success:true,mic_node:'',max_record_seconds:180,service_url:''};
 
 function renderChecks(checks){
   const root=$('checks'); root.textContent='';
@@ -213,7 +217,9 @@ async function refreshStatus(){
     const p=d.state.phase||'idle';
     $('state-title').textContent=names[p]||p;
     $('indicator').className='indicator '+p;
-    $('state-meta').textContent=d.state.error || hints[p] || '检查日志';
+    const outcomes={dispatched_unverified:'上次：已发送粘贴（无法确认目标应用已接收）',clipboard_only:'上次：已复制到剪贴板，请手动粘贴',focus_changed:'上次：处理期间窗口已切换，未粘贴，文字已复制',suspected_noise:'上次：未检测到清晰语音，结果未插入，可在下方查看'};
+    const last=p==='idle'&&d.state.last_result?outcomes[d.state.last_result]:'';
+    $('state-meta').textContent=d.state.error || last || hints[p] || '检查日志';
     renderDoctor(d.doctor||{});
   }catch(e){ $('state-meta').textContent=e.message; }
 }
@@ -261,7 +267,10 @@ async function loadSettings(){
   settings={...settings,...data.settings};
   fillSelect('language',Object.entries(data.languages),settings.language);
   fillSelect('mode',[['raw','原文 · 只转写'],['standard','智能修正 · 推荐'],['polished','流畅表达 · 适度润色']],settings.mode);
-  fillSelect('asr_model',[['whisper-large-v3','Whisper Large V3 · 准确优先'],['whisper-large-v3-turbo','Whisper Large V3 Turbo · 速度优先']],settings.asr_model);
+  fillSelect('asr_model',[['whisper-large-v3-turbo','Whisper Large V3 Turbo · 推荐'],['whisper-large-v3','Whisper Large V3 · 准确优先，成本约 2.8 倍']],settings.asr_model);
+  fillSelect('output_script',[['','不转换'],['hans','简体中文'],['hant','繁體中文']],settings.output_script||'');
+  $('dictation_commands').checked=settings.dictation_commands!==false;
+  $('insert_without_focus_check').checked=!!settings.insert_without_focus_check;
   $('max_record_seconds').value=settings.max_record_seconds;
   $('service_url').value=settings.service_url||'';
   $('service-note').textContent=settings.service_url
@@ -308,7 +317,8 @@ function renderService(data){
   const used=Number(usage.used_seconds||0);
   const limit=Number(usage.limit_seconds||0);
   summary.textContent='计划 '+(account.plan||'unknown')+' · 本期已用 '+used+'s'+(limit?(' / '+limit+'s'):'');
-  $('service-stats').textContent='剩余 '+(usage.remaining_seconds===undefined?'?':usage.remaining_seconds)+'s · 处理中预留 '+(usage.reserved_seconds||0)+'s · 服务版本 '+(server.server_version||'-')+' · Stripe '+(features.billing?'已配置':'未配置');
+  const resets=usage.resets_at?new Date(usage.resets_at).toLocaleString():'';
+  $('service-stats').textContent='剩余 '+(usage.remaining_seconds===undefined?'?':usage.remaining_seconds)+'s'+(resets?' · '+resets+' 重置':'')+' · 处理中预留 '+(usage.reserved_seconds||0)+'s · 服务版本 '+(server.server_version||'-')+' · Stripe '+(features.billing?'已配置':'未配置');
   $('service-bar').style.width=(limit>0?Math.min(100,Math.round(used/limit*100)):0)+'%';
   $('service-quota-note').textContent=(data.service_url||'')+' · 服务令牌只保存在本机 0600 文件';
   $('service-msg').textContent='';
@@ -356,7 +366,8 @@ $('save').onclick=async()=>{
   const body={language:$('language').value,mode:$('mode').value,asr_model:$('asr_model').value,mic_node:$('mic_node').value,
     max_record_seconds:Number($('max_record_seconds').value),auto_insert:$('auto_insert').checked,
     restore_text_clipboard:$('restore_text_clipboard').checked,delete_audio_on_success:$('delete_audio_on_success').checked,
-    service_url:$('service_url').value.trim()};
+    service_url:$('service_url').value.trim(),output_script:$('output_script').value,
+    dictation_commands:$('dictation_commands').checked,insert_without_focus_check:$('insert_without_focus_check').checked};
   try{ await api('/api/settings',body); settings={...settings,...body}; $('save-msg').textContent='设置已保存'; refreshStatus(); loadService(); }
   catch(e){ $('save-msg').textContent=e.message; }
 };

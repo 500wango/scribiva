@@ -71,7 +71,7 @@ class StripeClient:
             headers={
                 'Authorization': 'Bearer ' + self.settings.stripe_secret_key,
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'User-Agent': 'Scribiva-Server/0.1',
+                'User-Agent': 'Scribiva-Server/1.0',
             },
             method='POST',
         )
@@ -115,6 +115,11 @@ class StripeClient:
             'cancel_url': base + '/billing/cancel',
             'client_reference_id': user['id'],
             'metadata[user_id]': user['id'],
+            # Subscription objects do not inherit session metadata; without this
+            # a subscription event that arrives before checkout.session.completed
+            # cannot be attributed to a user.
+            'subscription_data[metadata][user_id]': user['id'],
+            'allow_promotion_codes': 'true',
         }
         if customer_id:
             params['customer'] = customer_id
@@ -139,6 +144,20 @@ class StripeClient:
         if not result.get('url'):
             raise BillingError('BILLING_PROVIDER_ERROR', 'Stripe did not return a portal URL', 502)
         return {'url': result['url']}
+
+
+def _period_end(obj: dict):
+    """current_period_end moved to subscription items in API version 2025-03-31."""
+    if obj.get('current_period_end') is not None:
+        return obj.get('current_period_end')
+    items = obj.get('items')
+    data = items.get('data') if isinstance(items, dict) else None
+    if isinstance(data, list):
+        ends = [item.get('current_period_end') for item in data
+                if isinstance(item, dict) and isinstance(item.get('current_period_end'), int)]
+        if ends:
+            return max(ends)
+    return None
 
 
 def _event_user(conn, event: dict) -> str | None:
@@ -179,30 +198,36 @@ def apply_event(conn, event: dict) -> dict:
         subscription_id = obj['subscription']
     metadata = obj.get('metadata') if isinstance(obj.get('metadata'), dict) else {}
     plan_code = metadata.get('plan_code', 'pro')
+    created = event.get('created') if isinstance(event.get('created'), int) else None
 
     if event_type == 'checkout.session.completed':
-        db.set_subscription(conn, user_id, status='incomplete', plan_code=plan_code,
-                            customer_id=customer,
-                            subscription_id=obj.get('subscription') if isinstance(
-                                obj.get('subscription'), str) else subscription_id)
-        return {'applied': True, 'status': 'incomplete'}
+        # Only links the Stripe customer/subscription to the user; never changes
+        # entitlement, so it cannot downgrade an already-active subscription.
+        db.link_stripe_customer(conn, user_id, customer_id=customer,
+                                subscription_id=subscription_id)
+        return {'applied': True, 'status': 'linked'}
 
     if event_type in ('customer.subscription.created', 'customer.subscription.updated',
                       'customer.subscription.deleted'):
         status = obj.get('status') or ('canceled' if event_type.endswith('deleted') else 'inactive')
         if event_type.endswith('deleted'):
             status = 'canceled'
-        db.set_subscription(
+        applied = db.set_subscription(
             conn, user_id, status=str(status), plan_code=plan_code,
             customer_id=customer, subscription_id=subscription_id,
-            current_period_end=_stripe_time(obj.get('current_period_end')),
+            current_period_end=_stripe_time(_period_end(obj)),
+            event_created=created,
         )
+        if not applied:
+            return {'applied': False, 'reason': 'stale event'}
         return {'applied': True, 'status': status}
 
     if event_type in ('invoice.payment_failed', 'invoice.payment_action_required'):
-        db.set_subscription(conn, user_id, status='past_due', plan_code=plan_code,
-                            customer_id=customer, subscription_id=subscription_id)
-        return {'applied': True, 'status': 'past_due'}
+        # Stripe follows up with customer.subscription.updated (past_due/unpaid);
+        # that event is the authority. Record only the linkage here.
+        db.link_stripe_customer(conn, user_id, customer_id=customer,
+                                subscription_id=subscription_id)
+        return {'applied': False, 'reason': 'subscription event required'}
 
     if event_type == 'invoice.paid':
         # Do not infer entitlement from an invoice; subscription events are the

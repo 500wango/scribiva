@@ -64,8 +64,39 @@ def _print_last(raw: bool, as_json: bool) -> None:
     print(text, end='' if text.endswith('\n') else '\n')
 
 
+def _reset_suffix(usage: dict) -> str:
+    resets = usage.get('resets_at')
+    if not isinstance(resets, str):
+        return ''
+    from datetime import datetime
+    try:
+        local = datetime.fromisoformat(resets).astimezone()
+    except ValueError:
+        return ''
+    return ' · resets ' + local.strftime('%Y-%m-%d %H:%M %Z')
+
+
+def _browser_login(conf: dict) -> str:
+    """Device authorization (FR-019): browser + email link; the token never
+    appears on screen or in the browser."""
+    import webbrowser
+    start = providers.device_login_start(conf)
+    print('Login code: ' + start['user_code'])
+    print('Opening ' + start['verification_uri_complete'])
+    print('If the browser does not open, visit the URL above and enter the code.')
+    sys.stdout.flush()
+    try:
+        webbrowser.open(start['verification_uri_complete'], new=2)
+    except webbrowser.Error:
+        pass
+    print('Waiting for confirmation from the email link…', file=sys.stderr)
+    return providers.device_login_poll(conf, start['device_code'],
+                                       interval=int(start.get('interval') or 3),
+                                       expires_in=int(start.get('expires_in') or 900))
+
+
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(prog='scribiva', description='Scribiva Linux developer alpha')
+    parser = argparse.ArgumentParser(prog='scribiva', description='Scribiva voice typing for Linux')
     parser.add_argument('--version', action='version', version=__version__)
     commands = parser.add_subparsers(dest='cmd', required=True)
     commands.add_parser('toggle', help='Toggle recording (GNOME shortcut target)')
@@ -84,6 +115,13 @@ def main(argv=None) -> int:
                    help='Subscription plan for `service billing`')
     p.add_argument('--confirm', action='store_true',
                    help='Required for `service delete` (server-side account data deletion)')
+    p.add_argument('--token', action='store_true',
+                   help='`service login`: paste an existing scr_ token instead of browser login')
+    p = commands.add_parser('dictionary', help='Show or replace the personal dictionary')
+    p.add_argument('action', nargs='?', default='list',
+                   choices=['list', 'add', 'remove', 'set-json'])
+    p.add_argument('terms', nargs='*', help='Terms for add/remove, or one JSON array for set-json')
+    p.add_argument('--json', action='store_true', help='Machine-readable output')
     commands.add_parser('copy-last', help='Copy last transcript')
     commands.add_parser('paste-last', help='Manually dispatch last transcript once')
     commands.add_parser('clear-last', help='Delete locally stored transcripts')
@@ -158,7 +196,11 @@ def main(argv=None) -> int:
                 url = validate_service_url(args.url or conf.get('service_url', ''))
                 if not url:
                     raise ValueError('Service URL required: scribiva service login --url https://...')
-                token = getpass.getpass('Scribiva service token (not echoed): ').strip()
+                login_conf = {**conf, 'service_url': url}
+                if args.token:
+                    token = getpass.getpass('Scribiva service token (not echoed): ').strip()
+                else:
+                    token = _browser_login(login_conf)
                 if not SERVICE_TOKEN_RE.fullmatch(token):
                     raise ValueError('Invalid service token format (expected scr_...)')
                 account = providers.service_me({**conf, 'service_url': url}, token=token)
@@ -168,7 +210,8 @@ def main(argv=None) -> int:
                 usage = account.get('usage', {}) if isinstance(account.get('usage'), dict) else {}
                 print(f'Service configured: {url}')
                 print(f"Plan: {plan} · used {usage.get('used_seconds', 0)}s · "
-                      f"remaining {usage.get('remaining_seconds', '?')}s")
+                      f"remaining {usage.get('remaining_seconds', '?')}s"
+                      + _reset_suffix(usage))
                 return 0
             if not providers.service_configured(conf):
                 raise RuntimeError('Service is not configured; run `scribiva service login --url ...`')
@@ -194,6 +237,32 @@ def main(argv=None) -> int:
                 print('Local service token and URL cleared')
             else:
                 raise ValueError('Unsupported service action')
+        elif args.cmd == 'dictionary':
+            conf = read_config()
+            if not providers.service_configured(conf):
+                raise RuntimeError('The personal dictionary needs service mode; '
+                                   'run `scribiva service login --url ...`')
+            current = providers.service_dictionary(conf)
+            terms = list(current.get('terms') or [])
+            if args.action == 'add':
+                data = providers.service_dictionary(conf, terms + args.terms)
+            elif args.action == 'remove':
+                drop = {t.casefold() for t in args.terms}
+                data = providers.service_dictionary(conf, [t for t in terms
+                                                           if t.casefold() not in drop])
+            elif args.action == 'set-json':
+                if len(args.terms) != 1:
+                    raise ValueError('set-json takes one JSON array argument')
+                data = providers.service_dictionary(conf, json.loads(args.terms[0]))
+            else:
+                data = current
+            if args.json:
+                print(json.dumps(data, indent=2, ensure_ascii=False))
+            else:
+                for term in data.get('terms') or []:
+                    print(term)
+                print(f"({len(data.get('terms') or [])}/{data.get('max_terms', '?')})",
+                      file=sys.stderr)
         elif args.cmd == 'set':
             name = args.name
             if name not in read_config():
@@ -231,6 +300,9 @@ def main(argv=None) -> int:
             from .dashboard import serve
             serve()
         return 0
+    except KeyboardInterrupt:
+        print('Scribiva: interrupted', file=sys.stderr)
+        return 130
     except (RuntimeError, ValueError, OSError, subprocess.CalledProcessError) as e:
         print('Scribiva error: ' + str(e), file=sys.stderr)
         return 1

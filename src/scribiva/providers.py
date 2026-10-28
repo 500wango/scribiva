@@ -219,10 +219,12 @@ def _service_result(payload: dict, job_id: str) -> dict:
         'output_text': output,
         'warning': warning,
         'billing': billing,
+        'suspected_hallucination': payload.get('suspected_hallucination') is True,
     }
 
 
-def service_dictation(audio_path: Path, config: dict, job_id: str | None = None) -> dict:
+def service_dictation(audio_path: Path, config: dict, job_id: str | None = None,
+                      mime: str = 'audio/wav') -> dict:
     """Send one recording through the authenticated server (ASR + grammar)."""
     if not service_configured(config):
         raise ProviderError('Service URL is not configured', code='SERVICE_NOT_CONFIGURED')
@@ -236,12 +238,16 @@ def service_dictation(audio_path: Path, config: dict, job_id: str | None = None)
     job_id = job_id or secrets.token_hex(16)
     if not CLIENT_JOB_RE.fullmatch(job_id):
         raise ProviderError('Internal job id has an invalid format')
+    if mime not in ('audio/wav', 'audio/flac'):
+        raise ProviderError('Unsupported upload format')
     fields = [
-        'audio=@' + str(path) + ';type=audio/wav',
+        'audio=@' + str(path) + ';type=' + mime,
         'language=' + str(config.get('language') or 'auto'),
         'grammar_mode=' + str(config.get('mode') or 'standard'),
         'client_job_id=' + job_id,
         'client_version=' + __version__[:64],
+        'output_script=' + str(config.get('output_script') or ''),
+        'dictation_commands=' + ('1' if config.get('dictation_commands', True) else '0'),
     ]
     status, payload = _service_call(
         config, '/v1/dictations', fields=fields, timeout=95,
@@ -300,6 +306,75 @@ def service_delete(config: dict, token: str | None = None) -> dict:
         config, '/v1/me/data', token=token, payload={'confirm': 'DELETE'},
         timeout=30, method='DELETE')
     return payload
+
+
+def service_dictionary(config: dict, terms: list[str] | None = None,
+                       token: str | None = None) -> dict:
+    """Read (terms is None) or replace the personal dictionary (FR-018)."""
+    if terms is None:
+        _, payload = _service_call(config, '/v1/me/dictionary', token=token, timeout=15)
+    else:
+        if not isinstance(terms, list) or not all(isinstance(t, str) for t in terms):
+            raise ProviderError('Dictionary must be a list of strings', code='INVALID_DICTIONARY')
+        _, payload = _service_call(config, '/v1/me/dictionary', token=token,
+                                   payload={'terms': terms}, timeout=15, method='PUT')
+    return payload
+
+
+def _public_post(config: dict, path: str, payload: dict, timeout: int = 15) -> tuple[str, dict | None, str]:
+    base = _service_base(config)
+    status, raw, stderr = _curl(None, base + path, payload=payload, config=config,
+                                timeout=timeout, method='POST')
+    try:
+        parsed = json.loads(raw) if raw else None
+    except ValueError:
+        parsed = None
+    return status, parsed if isinstance(parsed, dict) else None, stderr
+
+
+def device_login_start(config: dict) -> dict:
+    """Begin device authorization (FR-019); returns the server's start payload."""
+    status, payload, stderr = _public_post(config, '/v1/auth/device',
+                                           {'client_name': 'scribiva-linux'})
+    if status != '200' or not payload:
+        raise _service_error(status, json.dumps(payload or {}), stderr)
+    for key in ('device_code', 'user_code', 'verification_uri_complete'):
+        if not isinstance(payload.get(key), str) or not payload[key]:
+            raise ProviderError('Login service returned an invalid response',
+                                code='SERVICE_BAD_RESPONSE')
+    # The URL is opened in the user's browser; the token never travels there.
+    # Require HTTPS (plain HTTP only for a loopback development server).
+    try:
+        validate_service_url(payload['verification_uri_complete'].split('?', 1)[0])
+    except ValueError as exc:
+        raise ProviderError('Login service returned an unsafe URL',
+                            code='LOGIN_URL_INVALID') from exc
+    return payload
+
+
+def device_login_poll(config: dict, device_code: str, *, interval: int = 3,
+                      expires_in: int = 900, sleep=time.sleep) -> str:
+    """Poll until the browser step completes; returns the access token."""
+    deadline = time.monotonic() + max(30, min(int(expires_in), 3600))
+    interval = max(1, min(int(interval), 30))
+    while time.monotonic() < deadline:
+        sleep(interval)
+        status, payload, stderr = _public_post(config, '/v1/auth/device/token',
+                                               {'device_code': device_code})
+        if status == '200' and payload and isinstance(payload.get('access_token'), str):
+            return payload['access_token']
+        code = ((payload or {}).get('error') or {}).get('code') if payload else None
+        if code == 'AUTHORIZATION_PENDING':
+            continue
+        if code == 'SLOW_DOWN':
+            interval += 5
+            continue
+        if code == 'EXPIRED_TOKEN':
+            raise ProviderError('Login code expired; run `scribiva service login` again',
+                                code=code)
+        raise _service_error(status, json.dumps(payload or {}), stderr)
+    raise ProviderError('Login timed out; run `scribiva service login` again',
+                        code='EXPIRED_TOKEN')
 
 
 def service_status(config: dict, token: str | None = None) -> dict:

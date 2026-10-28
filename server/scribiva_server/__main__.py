@@ -181,9 +181,89 @@ def cmd_grant_pro(args) -> int:
     return 0
 
 
+def cmd_backup(args) -> int:
+    """Consistent online backup (sqlite3 backup API) with an integrity check."""
+    import sqlite3
+    settings = _settings(args)
+    target = Path(args.output).expanduser()
+    if target.exists():
+        print(f'Refusing to overwrite {target}', file=sys.stderr)
+        return 1
+    target.parent.mkdir(parents=True, exist_ok=True)
+    source = db.connect(settings.db_path)
+    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.close(fd)
+    dest = sqlite3.connect(str(target))
+    try:
+        source.backup(dest)
+        result = dest.execute('PRAGMA integrity_check').fetchone()[0]
+    finally:
+        dest.close()
+        source.close()
+    if result != 'ok':
+        print(f'Backup integrity check failed: {result}', file=sys.stderr)
+        return 1
+    print(f'Backup written to {target}')
+    return 0
+
+
+def cmd_purge(args) -> int:
+    """Clear expired transcripts (TTL) and drop expired login records."""
+    settings = _settings(args)
+    conn = _open_db(settings)
+    try:
+        now = db.iso()
+        with db.transaction(conn, immediate=True):
+            texts = conn.execute(
+                """UPDATE dictation_jobs SET raw_text=NULL, output_text=NULL, warning=NULL,
+                   processing_json=NULL WHERE result_expires_at IS NOT NULL
+                   AND result_expires_at <= ? AND (raw_text IS NOT NULL OR output_text IS NOT NULL)""",
+                (now,)).rowcount
+            devices = conn.execute('DELETE FROM device_authorizations WHERE expires_at <= ?',
+                                   (now,)).rowcount
+            links = conn.execute('DELETE FROM magic_links WHERE expires_at <= ?',
+                                 (now,)).rowcount
+    finally:
+        conn.close()
+    print(json.dumps({'cleared_transcripts': texts, 'deleted_device_codes': devices,
+                      'deleted_magic_links': links}))
+    return 0
+
+
+def cmd_check_provider(args) -> int:
+    """Production preflight (R17): one cheap Groq call from this server."""
+    import urllib.error
+    import urllib.request
+    settings = _settings(args)
+    if not settings.groq_api_key:
+        print('GROQ_API_KEY is not set', file=sys.stderr)
+        return 2
+    request = urllib.request.Request(
+        settings.groq_base_url + '/models',
+        headers={'Authorization': 'Bearer ' + settings.groq_api_key,
+                 'User-Agent': 'Scribiva-Server/1.0'})
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            body = json.loads(response.read().decode('utf-8'))
+    except urllib.error.HTTPError as exc:
+        print(f'Groq returned HTTP {exc.code}; Cloudflare 1010 or a blocked region also '
+              'appears here. Do not work around it; contact Groq support.', file=sys.stderr)
+        return 1
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        print(f'Groq unreachable: {exc}', file=sys.stderr)
+        return 1
+    ids = {m.get('id') for m in body.get('data', []) if isinstance(m, dict)}
+    missing = [m for m in (settings.asr_model, settings.grammar_model) if m not in ids]
+    if missing:
+        print('Configured models not offered by Groq: ' + ', '.join(missing), file=sys.stderr)
+        return 1
+    print(f'Groq reachable; models available: {settings.asr_model}, {settings.grammar_model}')
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog='scribiva-server',
-                                     description='Scribiva server proxy and quota skeleton')
+                                     description='Scribiva API server')
     parser.add_argument('--version', action='version', version=__version__)
     sub = parser.add_subparsers(dest='cmd', required=True)
 
@@ -226,6 +306,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--customer')
     p.add_argument('--db')
     p.set_defaults(func=cmd_grant_pro)
+
+    p = sub.add_parser('backup', help='Write a consistent, integrity-checked SQLite backup')
+    p.add_argument('--output', required=True)
+    p.add_argument('--db')
+    p.set_defaults(func=cmd_backup)
+
+    p = sub.add_parser('purge', help='Clear expired transcripts and login records')
+    p.add_argument('--db')
+    p.set_defaults(func=cmd_purge)
+
+    p = sub.add_parser('check-provider', help='Verify Groq is reachable from this server')
+    p.set_defaults(func=cmd_check_provider)
     return parser
 
 

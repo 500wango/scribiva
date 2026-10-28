@@ -8,8 +8,13 @@ from pathlib import Path
 from unittest.mock import patch
 from scribiva import engine
 
+EDITOR = {'source': 'gnome-extension', 'app_id': 'md.obsidian.desktop',
+          'wm_class': 'obsidian', 'window_id': 42, 'pid': 100}
+TERMINAL = {'source': 'gnome-extension', 'app_id': 'org.gnome.Ptyxis.desktop',
+            'wm_class': 'org.gnome.Ptyxis', 'window_id': 7, 'pid': 200}
 CONFIG = {
-    'language': 'zh', 'mode': 'standard', 'asr_model': 'whisper-large-v3',
+    'language': 'zh', 'mode': 'standard', 'asr_model': 'whisper-large-v3-turbo',
+    'output_script': '', 'dictation_commands': True, 'insert_without_focus_check': False,
     'grammar_model': 'openai/gpt-oss-20b', 'auto_insert': True,
     'restore_text_clipboard': False, 'mic_node': 'alsa_input.fake',
     'max_record_seconds': 180, 'asr_prompt': '', 'proxy_url': '',
@@ -47,6 +52,11 @@ class EngineJobTests(unittest.TestCase):
             patch.object(engine.logger, 'info'),
             patch.object(engine.logger, 'warning'),
             patch.object(engine.logger, 'exception'),
+            # Focus is stable on an editor unless a test says otherwise.
+            patch.object(engine.focus, 'snapshot', return_value=EDITOR),
+            patch.object(engine.focus, 'set_indicator'),
+            patch.object(engine.audio, 'encode_flac', return_value=None),
+            patch.object(engine.audio, 'trim_silence', return_value={'trimmed': False}),
         ]
         for item in self.patches:
             item.start()
@@ -60,7 +70,7 @@ class EngineJobTests(unittest.TestCase):
 
     def test_worker_success_stores_final_and_raw(self):
         path = self.recording()
-        engine.set_state({'phase': 'processing', 'id': 'job1', 'file': str(path)})
+        engine.set_state({'phase': 'processing', 'id': 'job1', 'file': str(path), 'focus': EDITOR})
         with patch.object(engine, 'read_config', return_value=CONFIG), \
              patch.object(engine.audio, 'quality',
                           return_value={'duration': 1.5, 'rms': 900.0}), \
@@ -82,7 +92,7 @@ class EngineJobTests(unittest.TestCase):
     def test_worker_uses_service_proxy_without_local_key(self):
         path = self.recording()
         service_config = {**CONFIG, 'service_url': 'http://127.0.0.1:8787'}
-        engine.set_state({'phase': 'processing', 'id': 'job10', 'file': str(path)})
+        engine.set_state({'phase': 'processing', 'id': 'job10', 'file': str(path), 'focus': EDITOR})
         with patch.object(engine, 'read_config', return_value=service_config), \
              patch.object(engine.audio, 'quality',
                           return_value={'duration': 1.5, 'rms': 900.0}), \
@@ -100,10 +110,60 @@ class EngineJobTests(unittest.TestCase):
             engine.worker('job10')
         transcribe.assert_not_called()
         correct.assert_not_called()
-        service.assert_called_once_with(path, service_config, job_id='job10')
+        service.assert_called_once_with(path, service_config, job_id='job10',
+                                        mime='audio/wav')
         self.assertEqual(engine.LATEST_PATH.read_text(encoding='utf-8'), 'Service edited.')
         self.assertEqual(engine.LAST_RAW_PATH.read_text(encoding='utf-8'), 'service raw')
         self.assertEqual(engine.state()['last_warning'], 'service warn')
+
+    def _run_service_job(self, job, *, start_focus, end_focus, extra=None, config=None):
+        path = self.recording()
+        config = config or {**CONFIG, 'service_url': 'http://127.0.0.1:8787'}
+        engine.set_state({'phase': 'processing', 'id': job, 'file': str(path),
+                          'focus': start_focus})
+        payload = {'job_id': 'job_s', 'raw_text': 'raw', 'output_text': 'Edited.',
+                   'warning': '', 'billing': {}, **(extra or {})}
+        with patch.object(engine, 'read_config', return_value=config), \
+             patch.object(engine.audio, 'quality', return_value={'duration': 1.5, 'rms': 900.0}), \
+             patch.object(engine.providers, 'service_dictation', return_value=payload), \
+             patch.object(engine.focus, 'snapshot', return_value=end_focus), \
+             patch.object(engine.inject, 'copy_text') as copy, \
+             patch.object(engine.inject, 'dispatch', return_value='dispatched_unverified') as paste:
+            engine.worker(job)
+        return engine.state(), copy, paste
+
+    def test_focus_change_copies_instead_of_pasting(self):
+        other = {**EDITOR, 'window_id': 99}
+        state, copy, paste = self._run_service_job('jobf1', start_focus=EDITOR, end_focus=other)
+        self.assertEqual(state['last_result'], 'focus_changed')
+        paste.assert_not_called()
+        copy.assert_called_once_with('Edited.')
+
+    def test_unknown_focus_is_copy_only_unless_user_opted_in(self):
+        state, copy, paste = self._run_service_job('jobf2', start_focus=None, end_focus=None)
+        self.assertEqual(state['last_result'], 'clipboard_only')
+        paste.assert_not_called()
+        opted = {**CONFIG, 'service_url': 'http://127.0.0.1:8787',
+                 'insert_without_focus_check': True}
+        state, copy, paste = self._run_service_job('jobf3', start_focus=None, end_focus=None,
+                                                   config=opted)
+        self.assertEqual(state['last_result'], 'dispatched_unverified')
+        paste.assert_called_once()
+
+    def test_terminal_target_is_copy_only(self):
+        state, copy, paste = self._run_service_job('jobf4', start_focus=TERMINAL,
+                                                   end_focus=TERMINAL)
+        self.assertEqual(state['last_result'], 'clipboard_only')
+        paste.assert_not_called()
+
+    def test_suspected_hallucination_is_neither_pasted_nor_copied(self):
+        state, copy, paste = self._run_service_job(
+            'jobf5', start_focus=EDITOR, end_focus=EDITOR,
+            extra={'suspected_hallucination': True, 'output_text': '谢谢观看'})
+        self.assertEqual(state['last_result'], 'suspected_noise')
+        paste.assert_not_called()
+        copy.assert_not_called()
+        self.assertEqual(engine.LATEST_PATH.read_text(encoding='utf-8'), '谢谢观看')
 
     def test_cancel_during_asr_skips_grammar_and_result(self):
         path = self.recording()
@@ -178,7 +238,7 @@ class EngineJobTests(unittest.TestCase):
 
     def test_dispatch_failure_keeps_result_and_warning(self):
         path = self.recording()
-        engine.set_state({'phase': 'processing', 'id': 'job9', 'file': str(path)})
+        engine.set_state({'phase': 'processing', 'id': 'job9', 'file': str(path), 'focus': EDITOR})
         with patch.object(engine, 'read_config', return_value=CONFIG), \
              patch.object(engine.audio, 'quality', return_value={'duration': 1.5, 'rms': 900.0}), \
              patch.object(engine.providers, 'transcribe', return_value='原文'), \

@@ -114,7 +114,7 @@ class GroqProvider:
                 'Authorization': 'Bearer ' + key,
                 'Content-Type': 'application/json',
                 'Accept': 'application/json',
-                'User-Agent': 'Scribiva-Server/0.1',
+                'User-Agent': 'Scribiva-Server/1.0',
             },
             method='POST',
         )
@@ -130,15 +130,19 @@ class GroqProvider:
         return result
 
     def transcribe(self, data: bytes, *, filename: str, content_type: str,
-                   language: str, timeout: int | None = None) -> str:
+                   language: str, timeout: int | None = None,
+                   prompt: str = '') -> dict:
+        """Return {'text', 'language', 'segments'} from Whisper verbose_json."""
         key = self._require_key()
         fields = {
             'model': self.settings.asr_model,
-            'response_format': 'json',
+            'response_format': 'verbose_json',
             'temperature': '0',
         }
         if language and language != 'auto':
             fields['language'] = language
+        if prompt:
+            fields['prompt'] = prompt
         body, boundary_type = _multipart(fields, filename, content_type, data)
         request = urllib.request.Request(
             self.settings.groq_base_url + '/audio/transcriptions',
@@ -147,7 +151,7 @@ class GroqProvider:
                 'Authorization': 'Bearer ' + key,
                 'Content-Type': boundary_type,
                 'Accept': 'application/json',
-                'User-Agent': 'Scribiva-Server/0.1',
+                'User-Agent': 'Scribiva-Server/1.0',
             },
             method='POST',
         )
@@ -162,16 +166,28 @@ class GroqProvider:
             raise ProviderError('EMPTY_TRANSCRIPT',
                                 'Provider returned an empty transcript', status=502)
         try:
-            return textguard.ensure_text(text)
+            text = textguard.ensure_text(text)
         except textguard.GuardError as exc:
             raise ProviderError('TRANSCRIPT_INVALID', str(exc), status=502) from exc
+        segments = result.get('segments')
+        detected = result.get('language')
+        return {
+            'text': text,
+            'language': detected if isinstance(detected, str) and detected else None,
+            'segments': [
+                {'no_speech_prob': seg.get('no_speech_prob'),
+                 'avg_logprob': seg.get('avg_logprob')}
+                for seg in segments if isinstance(seg, dict)
+            ] if isinstance(segments, list) else [],
+        }
 
-    def correct(self, text: str, *, mode: str, language: str) -> tuple[str, str | None]:
+    def correct(self, text: str, *, mode: str, language: str,
+                terms: list[str] | None = None) -> tuple[str, str | None]:
         """Return (processed, warning); any guard/provider failure returns raw text."""
         mode = {'smart': 'standard', 'polish': 'polished'}.get(mode, mode)
         if mode == 'raw':
             return text, None
-        protected, parts = textguard.protect(text)
+        protected, parts = textguard.protect(text, terms)
         policy = (
             'Correct obvious grammar, punctuation and disfluencies conservatively; '
             'preserve speaker meaning, register, language, names and technical terminology.'
@@ -203,4 +219,4 @@ class GroqProvider:
             revised = textguard.restore(text, value.strip(), parts)
             return revised, None
         except (ProviderError, textguard.GuardError, KeyError, IndexError, TypeError) as exc:
-            return text, f'Grammar correction skipped: {str(exc)[:120]}'
+            return text, f'GRAMMAR_SKIPPED: {str(exc)[:120]}'

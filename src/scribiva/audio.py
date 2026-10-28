@@ -87,3 +87,71 @@ def quality(path: Path) -> dict:
             rms = round(math.sqrt(sum(float(x)*x for x in data)/len(data)), 2)
     return {'duration': round(duration, 2), 'rate': rate, 'channels': channels,
             'sample_width': sample_width, 'rms': rms}
+
+
+def trim_silence(path: Path, *, frame_ms: int = 30, pad_ms: int = 300,
+                 min_rms: float = 120.0) -> dict:
+    """Trim leading/trailing silence in place (FR-017: less input for phantom text).
+
+    Energy-based and conservative: the threshold adapts to the quietest part of
+    the recording, and ``pad_ms`` of context is kept around detected speech.
+    Returns {'trimmed': bool, 'duration': seconds after trimming}.
+    """
+    with wave.open(str(path), 'rb') as wav:
+        params = wav.getparams()
+        frames = wav.readframes(wav.getnframes())
+    if params.sampwidth != 2 or params.nchannels != 1 or params.framerate <= 0:
+        return {'trimmed': False, 'duration': params.nframes / max(1, params.framerate)}
+    samples = array.array('h')
+    samples.frombytes(frames)
+    step = max(1, params.framerate * frame_ms // 1000)
+    levels = []
+    for start in range(0, len(samples), step):
+        chunk = samples[start:start + step]
+        levels.append(math.sqrt(sum(float(x) * x for x in chunk) / len(chunk)) if chunk else 0.0)
+    if not levels:
+        return {'trimmed': False, 'duration': 0.0}
+    floor = sorted(levels)[len(levels) // 10]
+    threshold = max(min_rms, floor * 3)
+    voiced = [i for i, level in enumerate(levels) if level >= threshold]
+    if not voiced:
+        return {'trimmed': False, 'duration': len(samples) / params.framerate}
+    pad = max(1, pad_ms // frame_ms)
+    first = max(0, voiced[0] - pad) * step
+    last = min(len(samples), (voiced[-1] + 1 + pad) * step)
+    if first == 0 and last >= len(samples):
+        return {'trimmed': False, 'duration': len(samples) / params.framerate}
+    kept = samples[first:last]
+    tmp = path.with_name(path.name + '.trim')
+    with wave.open(str(tmp), 'wb') as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(params.framerate)
+        out.writeframes(kept.tobytes())
+    os.replace(tmp, path)
+    return {'trimmed': True, 'duration': len(kept) / params.framerate}
+
+
+def encode_flac(path: Path) -> tuple[Path, str] | None:
+    """Losslessly compress for upload (smaller cross-border uploads, PRD §11.2).
+
+    Returns (flac_path, mime) or None when ffmpeg is unavailable or fails, in
+    which case the caller uploads the WAV unchanged.
+    """
+    import shutil
+    exe = shutil.which('ffmpeg')
+    if not exe:
+        return None
+    out = path.with_suffix('.flac')
+    try:
+        proc = subprocess.run(
+            [exe, '-nostdin', '-hide_banner', '-loglevel', 'error', '-y', '-i', str(path),
+             '-c:a', 'flac', '-compression_level', '5', str(out)],
+            stdin=subprocess.DEVNULL, capture_output=True, timeout=30, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        out.unlink(missing_ok=True)
+        return None
+    if proc.returncode != 0 or not out.is_file() or out.stat().st_size < 64:
+        out.unlink(missing_ok=True)
+        return None
+    return out, 'audio/flac'
