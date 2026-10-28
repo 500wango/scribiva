@@ -1,6 +1,6 @@
 // App shell: platform detection, shared state, navigation between the
-// screens from docs/06 §2. Windows state is pushed by Rust events; Linux
-// state is polled from the CLI.
+// screens from docs/06 §2. State is pushed by Rust `status` events on both
+// platforms, with a slow poll as a safety net.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Backend, detectPlatform, local, type Settings, type Status } from './backend';
@@ -56,26 +56,24 @@ function App({ backend }: { backend: Backend }) {
   const setLang = useCallback((l: UiLang) => {
     setLangState(l);
     local.set('ui_language', l);
-    if (backend.isWindows) backend.set('ui_language', l).catch(report);
+    backend.set('ui_language', l).catch(report);
   }, [backend, report]);
 
   useEffect(() => {
     refreshStatus(); refreshSettings();
     let off = () => {};
     backend.onStatus(setStatus).then(f => { off = f; });
-    // Linux has no push channel; poll the CLI. Windows gets events, but a slow
-    // poll keeps the view honest if an event was missed.
-    const id = window.setInterval(refreshStatus, backend.isWindows ? 5000 : 1600);
+    // Events carry every change; a slow poll keeps the view honest if one was missed.
+    const id = window.setInterval(refreshStatus, 5000);
     return () => { off(); window.clearInterval(id); };
   }, [backend, refreshStatus, refreshSettings]);
 
-  // First run → onboarding (Windows: stored in settings; Linux: per-viewer flag).
+  // First run → onboarding (stored in settings).
   useEffect(() => {
     if (decided.current || !settings) return;
     decided.current = true;
-    const done = backend.isWindows ? settings.onboarding_done === true : local.get('onboarding_done') === '1';
-    if (!done) setScreen('onboarding');
-  }, [settings, backend]);
+    if (settings.onboarding_done !== true) setScreen('onboarding');
+  }, [settings]);
 
   // Esc cancels an active recording while the window is focused (docs/06 §9).
   useEffect(() => {

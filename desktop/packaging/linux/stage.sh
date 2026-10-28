@@ -14,15 +14,6 @@ EITYPE_VERSION="0.2.2"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/lib/bin" "$STAGE/doc"
 
-# Python core and the local dashboard page.
-cp -R "$ROOT/src" "$STAGE/lib/src"
-mkdir -p "$STAGE/lib/web"
-cp "$ROOT/web/index.html" "$STAGE/lib/web/"
-# Syntax check only; bytecode is not shipped (scribiva-cli runs python3 -B, so none is
-# written into /usr/lib at runtime either).
-python3 -m compileall -q "$STAGE/lib/src"
-find "$STAGE/lib/src" -name '__pycache__' -prune -exec rm -rf {} +
-
 # GNOME Shell extension (ADR-012).
 cp -R "$ROOT/extensions/gnome-shell/scribiva@scribiva.app" "$STAGE/extension"
 

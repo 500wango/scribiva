@@ -2,7 +2,8 @@
 //! mode only (FR-001 P0). Esc is registered only while recording so the user
 //! can cancel without focusing our window; it is released right after.
 
-use super::app::Native;
+use crate::core::Phase;
+use crate::native::Native;
 use std::str::FromStr;
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
@@ -75,6 +76,15 @@ pub fn rebind(native: &Arc<Native>, old: &str, new: &str) -> Result<(), String> 
             native.set_hotkey_error(restored.err());
             Err(err)
         }
+    }
+}
+
+/// Esc is registered only while recording.
+pub fn on_phase(app: &AppHandle, prev: Option<Phase>, now: Phase) {
+    if now == Phase::Recording {
+        register_cancel(app);
+    } else if prev == Some(Phase::Recording) {
+        unregister_cancel(app);
     }
 }
 

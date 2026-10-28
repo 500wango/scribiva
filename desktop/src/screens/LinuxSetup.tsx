@@ -5,7 +5,7 @@ import type { LinuxSetup as Setup } from '../backend';
 import { useApp } from '../ui';
 
 export function LinuxSetup() {
-  const { backend, t } = useApp();
+  const { backend, t, refreshStatus } = useApp();
   const [setup, setSetup] = useState<Setup | null>(null);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -22,6 +22,7 @@ export function LinuxSetup() {
       const r = await backend.linuxSetup(action);
       setSetup(r.status);
       if (r.extension?.needs_relogin) setRelogin(true);
+      await refreshStatus();
     } catch (e) { setError(String(e)); }
     finally { setBusy(''); }
   }
@@ -38,9 +39,11 @@ export function LinuxSetup() {
           <h3>{t('lx_hotkey_title')}</h3>
           <p className="muted">
             {setup.hotkey.installed
-              ? t('lx_hotkey_done', { binding: prettyBinding(setup.hotkey.binding) })
-              : setup.hotkey.available ? t('lx_hotkey_missing') : t('lx_hotkey_manual')}
+              ? t('lx_hotkey_done', { binding: setup.hotkey.label || setup.hotkey.binding || '' })
+              : setup.hotkey.broken ? t('lx_hotkey_broken', { binding: setup.hotkey.label || '' })
+                : setup.hotkey.available ? t('lx_hotkey_missing') : t('lx_hotkey_manual', { command: setup.command })}
           </p>
+          <p className="muted small">{t('lx_cancel_hint')}</p>
         </div>
         {setup.hotkey.available && (
           <button type="button" disabled={busy !== ''} onClick={() => run('hotkey')}>
@@ -73,8 +76,3 @@ export function LinuxSetup() {
   );
 }
 
-function prettyBinding(b?: string) {
-  if (!b) return '';
-  return b.replace(/<Primary>|<Control>/g, 'Ctrl+').replace(/<Alt>/g, 'Alt+')
-    .replace(/<Shift>/g, 'Shift+').replace(/<Super>/g, 'Super+').replace(/\+([a-z])$/, (_, k) => '+' + k.toUpperCase());
-}

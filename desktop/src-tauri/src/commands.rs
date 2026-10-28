@@ -1,8 +1,11 @@
-//! Tauri commands exposed to the webview. Each OS gets its own whitelist;
-//! nothing here ever returns the service token.
+//! Tauri commands exposed to the webview. One whitelist for both platforms;
+//! nothing here ever returns the service token. Platform-specific commands
+//! (`setup_status`, `setup`) return an error where they do not apply.
 
-#[cfg(any(target_os = "linux", windows))]
+use crate::native::{native, DeviceList, LastView, StatusView};
+use crate::platform;
 use serde_json::Value;
+use tauri::AppHandle;
 
 #[tauri::command]
 pub fn platform() -> &'static str {
@@ -22,212 +25,186 @@ fn require_delete_confirmation(confirm: &str) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
-fn open_trusted_billing(app: &tauri::AppHandle, url: String) -> Result<(), String> {
-    if !crate::api::is_trusted_billing_url(&url) {
-        return Err("UNTRUSTED_BILLING_URL: refusing to open a non-Stripe page".into());
-    }
-    use tauri_plugin_opener::OpenerExt;
-    app.opener()
-        .open_url(url, None::<&str>)
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
         .map_err(|e| e.to_string())
 }
 
-// ------------------------------------------------------------------ Linux
+#[tauri::command]
+pub fn status(app: AppHandle) -> StatusView {
+    native(&app).view()
+}
 
-#[cfg(target_os = "linux")]
-pub mod linux_cmds {
-    use super::*;
-    use crate::linux;
+#[tauri::command]
+pub fn settings(app: AppHandle) -> Value {
+    crate::storage::settings_view(&native(&app).settings())
+}
 
-    #[tauri::command]
-    pub fn get_status() -> Result<Value, String> {
-        linux::status()
+#[tauri::command]
+pub fn set_setting(app: AppHandle, key: String, value: String) -> Result<Value, String> {
+    let s = native(&app).set_setting(&key, &value)?;
+    Ok(crate::storage::settings_view(&s))
+}
+
+#[tauri::command]
+pub async fn devices(app: AppHandle) -> Result<DeviceList, String> {
+    let configured = native(&app).settings().mic_device;
+    blocking(move || platform::audio::device_list(&configured)).await
+}
+
+/// Local microphone level test; audio is discarded immediately.
+#[tauri::command]
+pub async fn mic_test(app: AppHandle) -> Result<Value, String> {
+    let n = native(&app);
+    let (peak, rms) = blocking(move || n.mic_test(1500)).await??;
+    Ok(serde_json::json!({ "peak": peak, "rms": rms }))
+}
+
+#[tauri::command]
+pub fn last(app: AppHandle) -> LastView {
+    native(&app).last()
+}
+
+#[tauri::command]
+pub fn action(app: AppHandle, name: String) -> Result<(), String> {
+    let n = native(&app);
+    // Recording/stop work runs off the IPC thread so the UI stays responsive.
+    match name.as_str() {
+        "toggle" => {
+            std::thread::spawn(move || n.toggle());
+        }
+        "cancel" => {
+            std::thread::spawn(move || n.cancel());
+        }
+        "retry" => n.retry(),
+        "discard" => n.discard(),
+        "acknowledge" => n.acknowledge(),
+        "clear-last" => n.clear_last(),
+        "copy-last" => n.copy_last(false)?,
+        "copy-raw" => n.copy_last(true)?,
+        _ => return Err("Unsupported action".into()),
     }
-    #[tauri::command]
-    pub fn get_settings() -> Result<Value, String> {
-        linux::settings()
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn login(app: AppHandle, url: String) -> Result<Value, String> {
+    let view = native(&app).login(url).await?;
+    serde_json::to_value(view).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn cancel_login(app: AppHandle) {
+    native(&app).cancel_login();
+}
+
+#[tauri::command]
+pub fn logout(app: AppHandle) {
+    native(&app).logout();
+}
+
+#[tauri::command]
+pub async fn account(app: AppHandle, refresh: bool) -> Result<Option<crate::api::Me>, String> {
+    let n = native(&app);
+    if !refresh {
+        return Ok(n.cached_account());
     }
-    #[tauri::command]
-    pub fn get_devices() -> Result<Value, String> {
-        linux::devices()
+    n.refresh_account().await.map(Some)
+}
+
+#[tauri::command]
+pub async fn open_billing(app: AppHandle, portal: bool, plan: String) -> Result<(), String> {
+    native(&app).open_billing(portal, plan).await
+}
+
+#[tauri::command]
+pub async fn dictionary(app: AppHandle) -> Result<crate::api::Dictionary, String> {
+    native(&app).dictionary().await
+}
+
+#[tauri::command]
+pub async fn set_dictionary(
+    app: AppHandle,
+    terms: Vec<String>,
+) -> Result<crate::api::Dictionary, String> {
+    native(&app).set_dictionary(terms).await
+}
+
+#[tauri::command]
+pub async fn delete_data(app: AppHandle, confirm: String) -> Result<(), String> {
+    require_delete_confirmation(&confirm)?;
+    native(&app).delete_data().await
+}
+
+/// Linux: GNOME shortcut and extension state.
+#[tauri::command]
+pub async fn setup_status() -> Result<Value, String> {
+    #[cfg(target_os = "linux")]
+    {
+        blocking(|| serde_json::to_value(crate::linux::setup::status()).map_err(|e| e.to_string()))
+            .await?
     }
-    #[tauri::command]
-    pub fn get_last() -> Result<Value, String> {
-        linux::last()
-    }
-    #[tauri::command]
-    pub fn clear_last() -> Result<(), String> {
-        linux::action("clear-last").map(|_| ())
-    }
-    #[tauri::command]
-    pub fn set_setting(key: String, value: String) -> Result<(), String> {
-        linux::set_setting(&key, &value)
-    }
-    #[tauri::command]
-    pub fn action(name: String) -> Result<String, String> {
-        linux::action(&name)
-    }
-    #[tauri::command]
-    pub fn linux_service_status() -> Result<Value, String> {
-        linux::service_status()
-    }
-    #[tauri::command]
-    pub fn linux_dictionary() -> Result<Value, String> {
-        linux::dictionary()
-    }
-    #[tauri::command]
-    pub fn linux_set_dictionary(terms: Vec<String>) -> Result<Value, String> {
-        linux::set_dictionary(&terms)
-    }
-    #[tauri::command]
-    pub fn linux_login(app: tauri::AppHandle, url: String) -> Result<(), String> {
-        linux::login(app, &url)
-    }
-    #[tauri::command]
-    pub fn linux_logout() -> Result<String, String> {
-        linux::logout()
-    }
-    #[tauri::command]
-    pub fn linux_open_billing(
-        app: tauri::AppHandle,
-        portal: bool,
-        plan: String,
-    ) -> Result<(), String> {
-        let url = linux::billing_url(portal, &plan)?;
-        open_trusted_billing(&app, url)
-    }
-    #[tauri::command]
-    pub fn linux_delete_data(confirm: String) -> Result<String, String> {
-        require_delete_confirmation(&confirm)?;
-        linux::delete_data()
-    }
-    #[tauri::command]
-    pub fn linux_setup_status() -> Result<Value, String> {
-        linux::setup_status()
-    }
-    #[tauri::command]
-    pub fn linux_setup(action: String, binding: Option<String>) -> Result<Value, String> {
-        linux::setup(&action, binding.as_deref())
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err("Unsupported on this platform".into())
     }
 }
 
-// ---------------------------------------------------------------- Windows
-
-#[cfg(windows)]
-pub mod win_cmds {
-    use super::*;
-    use crate::windows::{app::LastView, app::StatusView, audio, native};
-    use tauri::AppHandle;
-
-    #[tauri::command]
-    pub fn win_status(app: AppHandle) -> StatusView {
-        native(&app).view()
-    }
-    #[tauri::command]
-    pub fn win_settings(app: AppHandle) -> crate::storage::Settings {
-        native(&app).settings()
-    }
-    #[tauri::command]
-    pub fn win_set_setting(
-        app: AppHandle,
-        key: String,
-        value: String,
-    ) -> Result<crate::storage::Settings, String> {
-        native(&app).set_setting(&key, &value)
-    }
-    #[tauri::command]
-    pub async fn win_devices() -> Result<Vec<audio::InputDevice>, String> {
-        tauri::async_runtime::spawn_blocking(audio::list_devices)
-            .await
-            .map_err(|e| e.to_string())?
-    }
-    /// Local microphone level test; audio is discarded immediately.
-    #[tauri::command]
-    pub async fn win_mic_test(app: AppHandle) -> Result<Value, String> {
+/// Linux: `action` = `hotkey` (bind the GNOME shortcut, optional `binding`
+/// accelerator) or `extension` (enable the GNOME extension).
+#[tauri::command]
+pub async fn setup(
+    app: AppHandle,
+    action: String,
+    binding: Option<String>,
+) -> Result<Value, String> {
+    #[cfg(target_os = "linux")]
+    {
         let n = native(&app);
-        if n.view().phase == crate::core::Phase::Recording {
-            return Err("Recording in progress".into());
-        }
-        let device = n.settings().mic_device;
-        let (peak, rms) =
-            tauri::async_runtime::spawn_blocking(move || audio::mic_test(&device, 1500))
-                .await
-                .map_err(|e| e.to_string())??;
-        Ok(serde_json::json!({ "peak": peak, "rms": rms }))
-    }
-    #[tauri::command]
-    pub fn win_last(app: AppHandle) -> LastView {
-        native(&app).last()
-    }
-    #[tauri::command]
-    pub fn win_action(app: AppHandle, name: String) -> Result<(), String> {
-        let n = native(&app);
-        // Recording/stop work runs off the IPC thread so the UI stays responsive.
-        match name.as_str() {
-            "toggle" => {
-                std::thread::spawn(move || n.toggle());
+        blocking(move || {
+            let r = crate::linux::setup::run_action(&action, binding.as_deref());
+            if action == "hotkey" {
+                crate::linux::refresh_hotkey_label(&n);
             }
-            "cancel" => {
-                std::thread::spawn(move || n.cancel());
-            }
-            "retry" => n.retry(),
-            "discard" => n.discard(),
-            "acknowledge" => n.acknowledge(),
-            "clear-last" => n.clear_last(),
-            "copy-last" => n.copy_last(false)?,
-            "copy-raw" => n.copy_last(true)?,
-            _ => return Err("Unsupported action".into()),
-        }
-        Ok(())
+            r
+        })
+        .await?
     }
-    #[tauri::command]
-    pub async fn win_login(app: AppHandle, url: String) -> Result<Value, String> {
-        let view = native(&app).login(url).await?;
-        serde_json::to_value(view).map_err(|e| e.to_string())
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (app, action, binding);
+        Err("Unsupported on this platform".into())
     }
-    #[tauri::command]
-    pub fn win_cancel_login(app: AppHandle) {
-        native(&app).cancel_login();
+}
+
+/// Environment checks (Linux; Windows reports only the basics). No window
+/// titles, no transcript text, no token.
+#[tauri::command]
+pub async fn diagnostics(app: AppHandle) -> Result<Value, String> {
+    let n = native(&app);
+    let s = n.settings();
+    #[cfg(target_os = "linux")]
+    {
+        let dir = n.config_dir();
+        blocking(move || {
+            serde_json::to_value(crate::linux::diagnostics::collect(
+                &dir,
+                &s.mic_device,
+                &s.service_url,
+            ))
+            .map_err(|e| e.to_string())
+        })
+        .await?
     }
-    #[tauri::command]
-    pub fn win_logout(app: AppHandle) {
-        native(&app).logout();
-    }
-    #[tauri::command]
-    pub async fn win_account(
-        app: AppHandle,
-        refresh: bool,
-    ) -> Result<Option<crate::api::Me>, String> {
-        let n = native(&app);
-        if !refresh {
-            return Ok(n.cached_account());
-        }
-        n.refresh_account().await.map(Some)
-    }
-    #[tauri::command]
-    pub async fn win_open_billing(
-        app: AppHandle,
-        portal: bool,
-        plan: String,
-    ) -> Result<(), String> {
-        native(&app).open_billing(portal, plan).await
-    }
-    #[tauri::command]
-    pub async fn win_dictionary(app: AppHandle) -> Result<crate::api::Dictionary, String> {
-        native(&app).dictionary().await
-    }
-    #[tauri::command]
-    pub async fn win_set_dictionary(
-        app: AppHandle,
-        terms: Vec<String>,
-    ) -> Result<crate::api::Dictionary, String> {
-        native(&app).set_dictionary(terms).await
-    }
-    #[tauri::command]
-    pub async fn win_delete_data(app: AppHandle, confirm: String) -> Result<(), String> {
-        require_delete_confirmation(&confirm)?;
-        native(&app).delete_data().await
+    #[cfg(not(target_os = "linux"))]
+    {
+        Ok(serde_json::json!({
+            "session": "windows",
+            "service_url": s.service_url,
+            "token_storage": crate::storage::token_backend(&n.config_dir()),
+            "checks": [],
+        }))
     }
 }
 

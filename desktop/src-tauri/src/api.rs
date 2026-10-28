@@ -1,12 +1,15 @@
 //! Scribiva service API (docs/05 §8). The pure part (URL validation, response
 //! parsing, error mapping) is platform independent and unit-tested; the HTTP
-//! client is only compiled for the native Windows core.
+//! client (reqwest + rustls/ring) is shared by Windows and Linux.
 
 use crate::core::{ErrorInfo, FailureClass};
 use serde::{Deserialize, Serialize};
 use url::{Host, Url};
 
+#[cfg(windows)]
 pub const CLIENT_NAME: &str = "scribiva-windows";
+#[cfg(not(windows))]
+pub const CLIENT_NAME: &str = "scribiva-linux";
 pub const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Hosts that may be opened in the browser for billing (FR-010).
 pub const TRUSTED_BILLING_HOSTS: &[&str] = &["checkout.stripe.com", "billing.stripe.com"];
@@ -386,10 +389,8 @@ pub fn poll_delay_ms(hint: Option<u64>, attempt: u32) -> u64 {
     base.saturating_mul(1u64 << attempt.min(4)).min(5_000)
 }
 
-#[cfg(windows)]
 pub use client::*;
 
-#[cfg(windows)]
 mod client {
     use super::*;
     use reqwest::{header, multipart, Client, StatusCode};

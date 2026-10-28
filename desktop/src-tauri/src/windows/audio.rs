@@ -3,21 +3,14 @@
 //! backend). Samples are converted to 16 kHz mono i16 on the fly.
 
 use crate::audio_dsp::Converter;
+use crate::native::{DeviceList, InputDevice};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
-use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
-
-#[derive(Debug, Clone, Serialize)]
-pub struct InputDevice {
-    pub id: String,
-    pub name: String,
-    pub default: bool,
-}
 
 pub fn list_devices() -> Result<Vec<InputDevice>, String> {
     let host = cpal::default_host();
@@ -39,9 +32,25 @@ pub fn list_devices() -> Result<Vec<InputDevice>, String> {
                 default: default_id.as_deref() == Some(id.as_str()),
                 id,
                 name,
+                is_virtual: false,
             })
         })
         .collect())
+}
+
+pub fn device_list(_configured: &str) -> DeviceList {
+    match list_devices() {
+        Ok(devices) => DeviceList {
+            devices,
+            active: None,
+            error: None,
+        },
+        Err(e) => DeviceList {
+            devices: Vec::new(),
+            active: None,
+            error: Some(e),
+        },
+    }
 }
 
 fn pick_device(device_id: &str) -> Result<cpal::Device, String> {

@@ -21,30 +21,18 @@ echo "PASS install: $(dpkg-query -W -f="\${Version}" scribiva)"
 useradd -m tester
 as_user() { su tester -c "cd ~ && XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=GNOME $*"; }
 
-as_user "scribiva-cli --version" | grep -qx "1.0.0" && echo "PASS core runs as user"
-as_user "scribiva-cli languages" | grep -q "^zh " && echo "PASS languages"
-as_user "scribiva-cli settings" | grep -q "whisper-large-v3-turbo" && echo "PASS default model turbo"
-as_user "scribiva-cli doctor" > /tmp/doctor.json
-python3 - <<EOF
-import json
-d = json.load(open("/tmp/doctor.json"))
-assert d["eitype_path"] == "/usr/lib/scribiva/bin/eitype", d["eitype_path"]
-checks = {c["id"]: c["status"] for c in d["checks"]}
-assert checks["injection"] == "ok", checks
-assert checks["focus"] == "warn", checks          # no GNOME session in the container
-print("PASS bundled eitype found by doctor")
-EOF
+test ! -e /usr/lib/scribiva/src && echo "PASS no Python core shipped"
+dpkg-query -W -f="\${Depends}" scribiva | grep -qv python3 && echo "PASS no python3 dependency"
+grep -q -- '--toggle' /usr/bin/scribiva-cli && echo "PASS legacy shortcut shim forwards to the app"
 /usr/lib/scribiva/bin/eitype --version | grep -q "0.2.2" && echo "PASS eitype runs"
-as_user "scribiva-cli setup status" | python3 -c "
-import json, sys
-s = json.load(sys.stdin)[\"status\"]
-assert s[\"extension\"][\"installed\"] is True, s
-print(\"PASS extension installed system-wide\")"
-test ! -e /usr/lib/scribiva/src/scribiva/__pycache__ && echo "PASS no bytecode shipped"
-as_user "scribiva-cli status" >/dev/null
-test ! -e /usr/lib/scribiva/src/scribiva/__pycache__ && echo "PASS no bytecode written at runtime"
+test -f /usr/share/gnome-shell/extensions/scribiva@scribiva.app/metadata.json \
+  && grep -q InsertText /usr/share/gnome-shell/extensions/scribiva@scribiva.app/extension.js \
+  && echo "PASS extension v2 installed system-wide"
 missing=$(ldd /usr/bin/scribiva /usr/lib/scribiva/bin/eitype | grep -c "not found" || true)
 [ "$missing" = 0 ] && echo "PASS shared libraries resolve"
+for tool in pw-record pw-dump wl-copy wl-paste; do command -v $tool >/dev/null || { echo "FAIL missing $tool"; exit 1; }; done
+echo "PASS runtime tools installed by Depends"
+grep -q '^Exec=scribiva$' /usr/share/applications/Scribiva.desktop && echo "PASS desktop entry"
 test -f /usr/share/doc/scribiva/LICENSE.eitype && echo "PASS third-party license shipped"
 
 apt-get remove -y -qq scribiva >/dev/null 2>&1

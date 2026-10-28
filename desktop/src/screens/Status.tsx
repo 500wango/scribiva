@@ -1,6 +1,6 @@
 // Status + recovery screen (docs/06 §3, PRD §7.5).
 import { useCallback, useEffect, useState } from 'react';
-import type { Last } from '../backend';
+import type { Diagnostics as DiagnosticsData, Last } from '../backend';
 import { noticeKey, phaseKey } from '../i18n';
 import { errorText, PHASE_GLYPH, Section, useApp } from '../ui';
 
@@ -33,23 +33,21 @@ export function StatusScreen({ onOpen }: { onOpen: (screen: 'account' | 'setting
   async function act(name: Parameters<typeof backend.action>[0]) {
     try {
       setCopied('');
-      await backend.action(name, last || undefined);
+      await backend.action(name);
       if (name === 'copy-last' || name === 'copy-raw') setCopied(t('phase_clipboard_only'));
       await refreshStatus();
       await loadLast();
     } catch (e) { report(e); }
   }
 
-  const hotkey = status?.hotkey || 'Ctrl+Alt+V';
+  // Linux: the GNOME shortcut, empty when none is set up yet.
+  const hotkey = status?.hotkey || (backend.isWindows ? 'Ctrl+Alt+V' : t('lx_no_hotkey'));
   const busy = phase === 'recording' || phase === 'processing' || phase === 'injecting';
   const notice = status?.notice ? noticeKey(status.notice) : null;
-  // Linux CLI reports the last delivery outcome separately from the phase.
-  const outcome = status?.lastOutcome;
-  const outcomeText = !backend.isWindows && phase === 'idle' && outcome
-    ? t(phaseKey(outcome === 'dispatched_unverified' ? 'ready' : outcome)) : '';
+  const inserted = phase === 'ready' && last?.outcome === 'inserted';
   const hint = phase === 'idle' ? t('hint_idle', { hotkey })
-    : phase === 'recording' ? t('hint_recording', { hotkey })
-      : phase === 'ready' ? t('hint_ready') : '';
+    : phase === 'recording' ? t(backend.isWindows ? 'hint_recording' : 'hint_recording_linux', { hotkey })
+      : phase === 'ready' ? t(inserted ? 'hint_inserted' : 'hint_ready') : '';
   const text = showRaw ? last?.raw : last?.text;
   const quotaReset = status?.error?.class === 'quota' || phase === 'quota';
 
@@ -60,12 +58,11 @@ export function StatusScreen({ onOpen }: { onOpen: (screen: 'account' | 'setting
           <span className="glyph" aria-hidden="true">{PHASE_GLYPH[phase] || '·'}</span>
           <div>
             <div className="statusName">
-              {t(phaseKey(phase))}
+              {t(inserted ? 'phase_inserted' : phaseKey(phase))}
               {phase === 'recording' && status?.recordingStartedMs ? ` · ${elapsed(status.recordingStartedMs, now)}` : ''}
             </div>
             {hint && <p className="muted">{hint}</p>}
             {notice && <p className="notice-text">{t(notice)}</p>}
-            {outcomeText && <p className="notice-text">{outcomeText}</p>}
             {status?.error && <p className="error-text">{status.error.code}: {status.error.message}</p>}
             {status?.hotkeyError && <p className="error-text">{status.hotkeyError}</p>}
           </div>
@@ -77,7 +74,7 @@ export function StatusScreen({ onOpen }: { onOpen: (screen: 'account' | 'setting
           <button type="button" className="soft" onClick={() => act('cancel')} disabled={!busy}>{t('cancel')}</button>
           <button type="button" className="soft" onClick={() => act('retry')} disabled={!status?.canRetry}>{t('retry')}</button>
           <button type="button" className="soft" onClick={() => act('discard')} disabled={phase !== 'error' && !busy}>{t('discard')}</button>
-          {!busy && phase !== 'idle' && backend.isWindows &&
+          {!busy && phase !== 'idle' &&
             <button type="button" className="soft" onClick={() => act('acknowledge')}>{t('dismiss')}</button>}
         </div>
         {quotaReset && (
@@ -113,8 +110,8 @@ export function StatusScreen({ onOpen }: { onOpen: (screen: 'account' | 'setting
         <p className="muted small">{t('memoryOnly')}</p>
       </Section>
 
-      {!backend.isWindows && status?.diagnostics && <Diagnostics data={status.diagnostics} />}
-      {backend.isWindows && status?.login && (
+      {backend.isLinux && <Diagnostics />}
+      {status?.login && (
         <Section title={t('signIn')}>
           <p>{t('loginCode')}: <b className="code">{status.login.user_code}</b></p>
           <p className="muted">{status.login.error ? errorText(status.login.error) : t('loginWaiting')}</p>
@@ -124,23 +121,34 @@ export function StatusScreen({ onOpen }: { onOpen: (screen: 'account' | 'setting
   );
 }
 
-function Diagnostics({ data }: { data: Record<string, unknown> }) {
-  const { t } = useApp();
-  const checks = Array.isArray(data.checks) ? data.checks as { id: string; status: string; detail: string }[] : [];
+function Diagnostics() {
+  const { backend, t, report } = useApp();
+  const [data, setData] = useState<DiagnosticsData | null>(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(async () => {
+    setBusy(true);
+    try { setData(await backend.diagnostics()); } catch (e) { report(e); } finally { setBusy(false); }
+  }, [backend, report]);
+  useEffect(() => { load(); }, [load]);
   return (
     <Section title={t('diagnostics')} wide>
-      <p className="diagnostic">
-        session: {String(data.session ?? '-')} · desktop: {String(data.desktop ?? '-')}<br />
-        mic: {String(data.mic_node ?? '-')} · service: {String(data.service_url || '-')}
-      </p>
+      {data && (
+        <p className="diagnostic">
+          session: {data.session || '-'} · desktop: {data.desktop || '-'}<br />
+          mic: {data.mic_node || '-'} · service: {data.service_url || '-'}
+        </p>
+      )}
       <ul className="checks">
-        {checks.map(c => (
+        {(data?.checks || []).map(c => (
           <li key={c.id} className="checkItem">
             <b>{c.id} <span className={`state ${c.status}`}>[{c.status}]</span></b>
             <span>{c.detail}</span>
           </li>
         ))}
       </ul>
+      <div className="actions">
+        <button type="button" className="soft" onClick={load} disabled={busy} aria-busy={busy}>{t('refresh')}</button>
+      </div>
     </Section>
   );
 }

@@ -1,6 +1,9 @@
 #!/bin/sh
-# Scribiva core (Python). Installed by the scribiva .deb; used by the desktop
-# app, the GNOME shortcut (`scribiva-cli toggle`) and power users.
-# -I (isolated: ignores PYTHONPATH, user site and the current directory) and
-# -B (no bytecode in /usr/lib); the package path is therefore set explicitly.
-exec /usr/bin/python3 -I -B -c 'import sys; sys.path.insert(0, "/usr/lib/scribiva/src"); sys.argv[0] = "scribiva-cli"; from scribiva.cli import main; raise SystemExit(main())' "$@"
+# Compatibility shim for shortcuts created by Scribiva builds that used the
+# Python core (`scribiva-cli toggle`). The Rust app repairs such shortcuts the
+# next time it starts; until then this forwards the common actions to it.
+case "${1:-}" in
+  toggle) exec /usr/bin/scribiva --toggle ;;
+  cancel) exec /usr/bin/scribiva --cancel ;;
+  *) echo "scribiva-cli is replaced by the Scribiva app (/usr/bin/scribiva)." >&2; exit 2 ;;
+esac

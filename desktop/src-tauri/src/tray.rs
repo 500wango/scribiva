@@ -1,9 +1,11 @@
-//! Tray icon, menu, tooltip and optional toast. The tray is the main surface
-//! on Windows: the window is hidden on close and never shown or focused when
-//! recording starts (no focus steal).
+//! Tray icon, menu, tooltip and optional notification (Windows and Linux).
+//! The tray is the main surface: the window is hidden on close and never
+//! shown or focused when recording starts (no focus steal). On Linux the
+//! icon is an AppIndicator (libayatana-appindicator3), whose menu is the
+//! only interaction (no click events).
 
-use super::app::{Native, StatusView};
 use crate::core::Phase;
+use crate::native::{Native, StatusView};
 use std::sync::Arc;
 use tauri::image::Image;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
@@ -15,10 +17,10 @@ const TRAY_ID: &str = "scribiva-tray";
 
 fn icon(kind: &str) -> Option<Image<'static>> {
     let bytes: &[u8] = match kind {
-        "recording" => include_bytes!("../../icons/tray-recording.png"),
-        "processing" => include_bytes!("../../icons/tray-processing.png"),
-        "attention" => include_bytes!("../../icons/tray-attention.png"),
-        _ => include_bytes!("../../icons/tray-idle.png"),
+        "recording" => include_bytes!("../icons/tray-recording.png"),
+        "processing" => include_bytes!("../icons/tray-processing.png"),
+        "attention" => include_bytes!("../icons/tray-attention.png"),
+        _ => include_bytes!("../icons/tray-idle.png"),
     };
     Image::from_bytes(bytes).ok().map(|i| i.to_owned())
 }
@@ -298,7 +300,7 @@ pub fn update(app: &AppHandle, view: &StatusView, lang: &str) {
         return;
     };
     let mut text = format!("Scribiva · {}", t(lang, view.phase.as_str()));
-    if view.phase == Phase::Idle {
+    if view.phase == Phase::Idle && !view.hotkey.is_empty() {
         text = format!("Scribiva · {} ({})", t(lang, "idle"), view.hotkey);
     }
     if let Some(e) = view

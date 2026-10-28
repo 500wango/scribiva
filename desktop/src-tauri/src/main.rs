@@ -1,97 +1,80 @@
-//! Scribiva desktop shell.
+//! Scribiva desktop app: one native Rust core for Windows and Linux.
 //!
-//! - Linux: whitelisted calls into the installed Python CLI (`linux.rs`).
-//! - Windows: native Rust core (`windows/`): hotkey, WASAPI capture, focus
-//!   guard, clipboard + single Ctrl+V, API client, Credential Manager.
-//!
-//! Platform-independent logic (state machine, DSP, focus policy, API parsing,
-//! settings validation) lives in the top-level modules and is unit-tested on
-//! every OS. On Linux those modules are only partly used, hence the
-//! `dead_code` allowance there.
+//! - `native`: the orchestrator (state machine driver, upload, login).
+//! - `core`, `api`, `audio_dsp`, `focus_policy`, `storage`: platform
+//!   independent logic, unit-tested on every OS.
+//! - `platform`: the OS adapters behind a small boundary (`audio`, `focus`,
+//!   `clipboard`, `deliver`, `hotkey`, `indicator`, `setting_changed`),
+//!   implemented in `windows/` (WASAPI, Win32, RegisterHotKey) and `linux/`
+//!   (pw-record, GNOME extension / X11, wl-clipboard + eitype, GNOME shortcut).
+//! - `tray`, `commands`: shared Tauri surface.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-#[cfg_attr(not(windows), allow(dead_code))]
 mod api;
+// Resampling/downmix serve cpal (Windows); pw-record already delivers 16 kHz mono.
 #[cfg_attr(not(windows), allow(dead_code))]
 mod audio_dsp;
 mod commands;
-#[cfg_attr(not(windows), allow(dead_code))]
 mod core;
-#[cfg_attr(not(windows), allow(dead_code))]
 mod focus_policy;
 #[cfg(target_os = "linux")]
 mod linux;
-#[cfg_attr(not(windows), allow(dead_code))]
+mod native;
 mod storage;
+mod tray;
 #[cfg(windows)]
 mod windows;
 
-#[cfg(target_os = "linux")]
-fn main() {
-    use commands::linux_cmds::*;
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![
-            commands::platform,
-            get_status,
-            get_settings,
-            get_devices,
-            get_last,
-            clear_last,
-            set_setting,
-            action,
-            linux_service_status,
-            linux_dictionary,
-            linux_set_dictionary,
-            linux_login,
-            linux_logout,
-            linux_open_billing,
-            linux_delete_data,
-            linux_setup_status,
-            linux_setup,
-        ])
-        .setup(|app| {
-            use tauri::Manager;
-            std::thread::spawn(linux::repair_hotkey);
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.show();
-            }
-            Ok(())
-        })
-        .run(tauri::generate_context!())
-        .expect("Failed to run Scribiva");
+/// OS adapters used by `native` and `commands`.
+mod platform {
+    #[cfg(target_os = "linux")]
+    pub use crate::linux::{
+        audio, clipboard, deliver, focus, hotkey, indicator, on_second_instance, setting_changed,
+        setup,
+    };
+    #[cfg(windows)]
+    pub use crate::windows::{
+        audio, clipboard, deliver, focus, hotkey, indicator, on_second_instance, setting_changed,
+        setup,
+    };
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn main() {
-    use commands::win_cmds::*;
-    tauri::Builder::default()
-        // Must be first so a second launch is redirected before anything else starts.
-        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            windows::on_second_instance(app);
+    let builder = tauri::Builder::default()
+        // Must be first so a second launch is redirected before anything else
+        // starts. On Linux this is how the GNOME shortcut (`scribiva --toggle`)
+        // reaches the running instance.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+            platform::on_second_instance(app, &argv);
         }))
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_notification::init())
-        .plugin(windows::hotkey::plugin())
+        .plugin(tauri_plugin_notification::init());
+    #[cfg(windows)]
+    let builder = builder.plugin(windows::hotkey::plugin());
+    builder
         .invoke_handler(tauri::generate_handler![
             commands::platform,
-            win_status,
-            win_settings,
-            win_set_setting,
-            win_devices,
-            win_mic_test,
-            win_last,
-            win_action,
-            win_login,
-            win_cancel_login,
-            win_logout,
-            win_account,
-            win_open_billing,
-            win_dictionary,
-            win_set_dictionary,
-            win_delete_data,
+            commands::status,
+            commands::settings,
+            commands::set_setting,
+            commands::devices,
+            commands::mic_test,
+            commands::last,
+            commands::action,
+            commands::login,
+            commands::cancel_login,
+            commands::logout,
+            commands::account,
+            commands::open_billing,
+            commands::dictionary,
+            commands::set_dictionary,
+            commands::delete_data,
+            commands::setup_status,
+            commands::setup,
+            commands::diagnostics,
         ])
-        .setup(|app| windows::setup(app))
+        .setup(|app| platform::setup(app))
         .run(tauri::generate_context!())
         .expect("Failed to run Scribiva");
 }

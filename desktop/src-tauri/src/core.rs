@@ -40,10 +40,15 @@ impl Phase {
     }
 }
 
-/// Final result of delivering text (docs/02 §4 `InsertOutcome`, subset used on Windows).
+/// Final result of delivering text (docs/02 §4 `InsertOutcome`, desktop subset).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InsertOutcome {
+    /// Committed into the focused text field by the GNOME extension's input
+    /// method (Linux). Stronger than a dispatched paste, still not verified
+    /// by reading the target back.
+    #[cfg_attr(windows, allow(dead_code))]
+    Inserted,
     DispatchedUnverified,
     ClipboardOnly,
     FocusChanged,
@@ -53,7 +58,7 @@ pub enum InsertOutcome {
 impl InsertOutcome {
     fn phase(self) -> Phase {
         match self {
-            InsertOutcome::DispatchedUnverified => Phase::Ready,
+            InsertOutcome::Inserted | InsertOutcome::DispatchedUnverified => Phase::Ready,
             InsertOutcome::ClipboardOnly => Phase::ClipboardOnly,
             InsertOutcome::FocusChanged => Phase::FocusChanged,
             InsertOutcome::SuspectedNoise => Phase::SuspectedNoise,

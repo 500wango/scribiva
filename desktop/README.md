@@ -53,7 +53,7 @@ TLS uses rustls with the `ring` provider (not reqwest's default `aws-lc-rs`, who
 
 `bundle.active` is on: Windows `nsis` (per-user install, no admin), Linux `deb`.
 
-The Linux `.deb` is self-contained: the Tauri app (`/usr/bin/scribiva`), the Python core (`/usr/lib/scribiva/src`, run as `/usr/bin/scribiva-cli`), the GNOME Shell extension (`/usr/share/gnome-shell/extensions/scribiva@scribiva.app`) and eitype 0.2.2 (`/usr/lib/scribiva/bin/eitype`, Apache-2.0, licenses in `/usr/share/doc/scribiva/`). Runtime packages are declared in `Depends`. Shortcut and extension are enabled per user from the first-run guide (`scribiva-cli setup`), never by the root maintainer scripts.
+The Linux `.deb` is self-contained: the Tauri app with the native Rust core (`/usr/bin/scribiva`; the GNOME shortcut runs `scribiva --toggle`), a `scribiva-cli` shim that keeps shortcuts from earlier Python-based builds working until the app repairs them, the GNOME Shell extension (`/usr/share/gnome-shell/extensions/scribiva@scribiva.app`) and eitype 0.2.2 (`/usr/lib/scribiva/bin/eitype`, Apache-2.0, licenses in `/usr/share/doc/scribiva/`). Runtime packages are declared in `Depends`. Shortcut and extension are enabled per user from the first-run guide, never by the root maintainer scripts. No Python is installed or required.
 
 Build it:
 

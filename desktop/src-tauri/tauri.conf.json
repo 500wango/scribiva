@@ -89,22 +89,19 @@
         "priority": "optional",
         "depends": [
           "libc6 (>= 2.39)",
-          "python3 (>= 3.10)",
           "pipewire-bin",
           "wireplumber",
           "wl-clipboard",
-          "curl",
-          "libnotify-bin",
           "libxkbcommon0"
         ],
         "recommends": [
-          "ffmpeg",
-          "x11-utils"
+          "x11-utils",
+          "xclip",
+          "xdotool",
+          "gnome-shell-extension-appindicator | gnome-shell"
         ],
         "files": {
           "/usr/bin/scribiva-cli": "../packaging/linux/scribiva-cli",
-          "/usr/lib/scribiva/src": "../packaging/linux/stage/lib/src",
-          "/usr/lib/scribiva/web": "../packaging/linux/stage/lib/web",
           "/usr/lib/scribiva/bin/eitype": "../packaging/linux/stage/lib/bin/eitype",
           "/usr/share/gnome-shell/extensions/scribiva@scribiva.app": "../packaging/linux/stage/extension",
           "/usr/share/doc/scribiva/copyright": "../packaging/linux/stage/doc/copyright",

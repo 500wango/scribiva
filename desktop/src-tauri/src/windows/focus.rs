@@ -2,7 +2,7 @@
 //! owning process id, its exe file name and integrity level. Window titles
 //! and contents are never read.
 
-use crate::focus_policy::{normalize_exe, FocusSnapshot};
+use crate::focus_policy::{normalize_exe, FocusSnapshot, FocusSource};
 use std::ffi::c_void;
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
 use windows_sys::Win32::Security::{
@@ -130,6 +130,8 @@ pub fn snapshot() -> Option<FocusSnapshot> {
         }
     }
     Some(FocusSnapshot {
+        source: FocusSource::Win32,
+        app_id: String::new(),
         window: hwnd as usize as u64,
         pid,
         exe,

@@ -1,7 +1,6 @@
 // First-run flow (docs/06 §4): value, privacy notice (US + Groq), sign-in,
-// microphone test, hotkey. Linux skips the Windows-only steps.
+// microphone test, hotkey (Linux: GNOME shortcut + extension setup).
 import { useState } from 'react';
-import { local } from '../backend';
 import { LoginPanel } from './Account';
 import { MicTest } from './Settings';
 import { LinuxSetup } from './LinuxSetup';
@@ -9,14 +8,13 @@ import { useApp } from '../ui';
 
 export function Onboarding({ onDone }: { onDone: () => void }) {
   const { backend, t, status, setSetting } = useApp();
-  const steps = ['privacy', 'login', ...(backend.isWindows ? ['mic', 'hotkey'] : ['hotkey'])] as const;
+  const steps = ['privacy', 'login', 'mic', 'hotkey'] as const;
   const [i, setI] = useState(0);
   const [agreed, setAgreed] = useState(false);
   const step = steps[i];
 
   async function finish() {
-    local.set('onboarding_done', '1');
-    if (backend.isWindows) await setSetting('onboarding_done', true);
+    await setSetting('onboarding_done', true);
     onDone();
   }
 
@@ -43,9 +41,11 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         {step === 'hotkey' && (
           <>
             <h2>{t('ob_hotkey_title')}</h2>
-            <p>{t('ob_hotkey_body', { hotkey: status?.hotkey || 'Ctrl+Alt+V' })}</p>
+            <p>{backend.isWindows
+              ? t('ob_hotkey_body', { hotkey: status?.hotkey || 'Ctrl+Alt+V' })
+              : t('ob_hotkey_body_linux')}</p>
             {status?.hotkeyError && <p className="error-text" role="alert">{status.hotkeyError}</p>}
-            {!backend.isWindows && <LinuxSetup />}
+            {backend.isLinux && <LinuxSetup />}
           </>
         )}
       </section>

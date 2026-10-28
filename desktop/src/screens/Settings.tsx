@@ -1,11 +1,10 @@
 // Settings (docs/06 §2): language, writing mode, zh script, dictation
 // commands, microphone, max duration, hotkey, insertion policy with risk text.
-// Controls render only when the backend reports the key, so Windows-only
-// options stay hidden on Linux and new Linux CLI options appear once the CLI
-// supports them.
+// Controls render only when the backend reports the key, so options for one
+// platform stay hidden on the other.
 import { useCallback, useEffect, useId, useState } from 'react';
 import { LinuxSetup } from './LinuxSetup';
-import { MIC_KEY, type Devices } from '../backend';
+import type { Devices } from '../backend';
 import { SPEECH_LANGUAGES } from '../i18n';
 import { has, Section, Select, Toggle, useApp } from '../ui';
 
@@ -28,7 +27,7 @@ export function SettingsScreen() {
     if (await setSetting(key, value)) setSaved(true);
   }
 
-  const micKey = MIC_KEY[backend.platform];
+  const micKey = 'mic_device';
   const micValue = str(micKey);
   const known = new Set((devices?.devices || []).map(d => d.id));
 
@@ -63,15 +62,15 @@ export function SettingsScreen() {
           ]} />
         {devices?.error && <p className="error-text">{devices.error}</p>}
         <div className="actions"><button type="button" className="soft" onClick={loadDevices}>{t('refresh')}</button></div>
-        {backend.isWindows && <MicTest disabled={status?.phase === 'recording'} />}
+        <MicTest disabled={status?.phase === 'recording'} />
         <NumberField label={t('maxDuration')} value={Number(s.max_record_seconds) || 180}
           min={5} max={600} onCommit={v => save('max_record_seconds', v)} />
       </Section>
 
       <Section title={t('sec_input')}>
-        {backend.isWindows && <HotkeyField value={str('hotkey')} error={status?.hotkeyError}
+        {has(s, 'hotkey') && <HotkeyField value={str('hotkey')} error={status?.hotkeyError}
           onCommit={v => save('hotkey', v)} />}
-        {!backend.isWindows && <LinuxSetup />}
+        {backend.isLinux && <LinuxSetup />}
         {has(s, 'auto_insert') && (
           <Toggle label={t('autoInsert')} checked={bool('auto_insert')} risk={t('autoInsertRisk')}
             onChange={v => save('auto_insert', v)} />
@@ -86,6 +85,9 @@ export function SettingsScreen() {
         )}
         {has(s, 'notifications') && (
           <Toggle label={t('notifications')} checked={bool('notifications')} onChange={v => save('notifications', v)} />
+        )}
+        {has(s, 'start_at_login') && (
+          <Toggle label={t('startAtLogin')} checked={bool('start_at_login')} onChange={v => save('start_at_login', v)} />
         )}
       </Section>
 

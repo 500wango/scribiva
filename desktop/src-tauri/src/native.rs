@@ -1,24 +1,26 @@
-//! Native Windows orchestrator: owns the state machine, microphone, focus
-//! snapshot, upload and delivery. Locking rule: the `inner` mutex is never
-//! held while calling into Tauri (emit, tray, shortcuts), because those calls
+//! Platform-neutral orchestrator (Windows and Linux): owns the state
+//! machine, microphone, focus snapshot, upload and delivery. OS specifics go
+//! through `crate::platform`. Locking rule: the `inner` mutex is never held
+//! while calling into Tauri (emit, tray, shortcuts), because those calls
 //! marshal to the main thread and wait.
 
-use super::{audio, clipboard, focus, hotkey, inject, tray};
 use crate::api::{self, ApiClient, CallError, DictationRequest, DictationResponse, Me};
 use crate::audio_dsp::{self, TARGET_RATE};
 use crate::core::{
-    CancelEffect, Core, ErrorInfo, FailureClass, InsertOutcome, LastResult, Phase, ResultAction,
-    RetryDecision, StopDecision,
+    CancelEffect, Core, ErrorInfo, FailureClass, LastResult, Phase, ResultAction, RetryDecision,
+    StopDecision,
 };
-use crate::focus_policy::{self, FocusDecision, FocusSnapshot};
+use crate::focus_policy::FocusSnapshot;
+use crate::platform::{self, audio, clipboard, focus, hotkey};
 use crate::storage::{self, Settings};
+use crate::tray;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
-pub(super) fn now_ms() -> u64 {
+pub fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -35,7 +37,7 @@ fn split_code(e: &str) -> (String, String) {
     }
 }
 
-pub(super) fn local_error(e: &str) -> ErrorInfo {
+pub fn local_error(e: &str) -> ErrorInfo {
     let (code, message) = split_code(e);
     ErrorInfo {
         code,
@@ -46,11 +48,30 @@ pub(super) fn local_error(e: &str) -> ErrorInfo {
 }
 
 /// Audio kept in memory only, for retry after a failure (never on disk).
-pub(super) struct Retained {
+struct Retained {
     pub job_id: String,
     pub wav: Vec<u8>,
     pub duration_ms: u64,
     pub focus: Option<FocusSnapshot>,
+}
+
+/// Input device as shown in the UI. `id` is a cpal device id (Windows) or a
+/// PipeWire `node.name` (Linux); empty = system default.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InputDevice {
+    pub id: String,
+    pub name: String,
+    pub default: bool,
+    #[serde(rename = "virtual")]
+    pub is_virtual: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DeviceList {
+    pub devices: Vec<InputDevice>,
+    /// Device a recording would use right now (Linux), if known.
+    pub active: Option<String>,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -61,7 +82,7 @@ pub struct LoginView {
     pub error: Option<String>,
 }
 
-pub(super) struct Inner {
+struct Inner {
     pub core: Core,
     pub settings: Settings,
     pub config_dir: PathBuf,
@@ -72,12 +93,15 @@ pub(super) struct Inner {
     pub login: Option<LoginView>,
     pub login_gen: u64,
     pub hotkey_error: Option<String>,
+    /// Shortcut shown in the UI when it is not `settings.hotkey` (Linux:
+    /// the GNOME custom shortcut, empty when none is set up).
+    pub hotkey_label: Option<String>,
     published: Option<Phase>,
 }
 
 pub struct Native {
-    pub(super) app: AppHandle,
-    pub(super) inner: Mutex<Inner>,
+    pub app: AppHandle,
+    inner: Mutex<Inner>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -105,9 +129,10 @@ pub struct LastView {
 }
 
 impl Native {
+    /// The token is loaded separately (`load_token`), because the Linux
+    /// Secret Service may block on an unlock prompt.
     pub fn new(app: AppHandle, config_dir: PathBuf) -> Arc<Self> {
         let settings = storage::load_settings(&config_dir);
-        let token = storage::load_token();
         Arc::new(Self {
             app,
             inner: Mutex::new(Inner {
@@ -116,18 +141,38 @@ impl Native {
                 config_dir,
                 recorder: None,
                 retained: None,
-                token,
+                token: None,
                 account: None,
                 login: None,
                 login_gen: 0,
                 hotkey_error: None,
+                hotkey_label: None,
                 published: None,
             }),
         })
     }
 
+    /// Read the token from the OS secret store. Returns whether one exists.
+    pub fn load_token(&self) -> bool {
+        let dir = self.lock().config_dir.clone();
+        let token = storage::load_token(&dir);
+        let found = token.is_some();
+        self.lock().token = token;
+        found
+    }
+
+    pub fn config_dir(&self) -> PathBuf {
+        self.lock().config_dir.clone()
+    }
+
+    fn forget_token(&self) {
+        let dir = self.config_dir();
+        storage::delete_token(&dir);
+        self.lock().token = None;
+    }
+
     /// Poison-tolerant lock: a panicked worker must not brick the app.
-    pub(super) fn lock(&self) -> MutexGuard<'_, Inner> {
+    fn lock(&self) -> MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -152,7 +197,10 @@ impl Native {
             has_last: g.core.last().is_some(),
             signed_in: g.token.is_some() && !g.settings.service_url.is_empty(),
             service_url: g.settings.service_url.clone(),
-            hotkey: g.settings.hotkey.clone(),
+            hotkey: g
+                .hotkey_label
+                .clone()
+                .unwrap_or_else(|| g.settings.hotkey.clone()),
             hotkey_error: g.hotkey_error.clone(),
             login: g.login.clone(),
         }
@@ -181,11 +229,8 @@ impl Native {
         let _ = self.app.emit("status", &view);
         tray::update(&self.app, &view, &lang);
         if prev != Some(view.phase) {
-            if view.phase == Phase::Recording {
-                hotkey::register_cancel(&self.app);
-            } else if prev == Some(Phase::Recording) {
-                hotkey::unregister_cancel(&self.app);
-            }
+            hotkey::on_phase(&self.app, prev, view.phase);
+            platform::indicator(view.phase);
             if notify {
                 tray::toast(&self.app, &view, &lang);
             }
@@ -471,8 +516,7 @@ impl Native {
                 self.lock().core.failed(&job_id, err);
                 if auth {
                     // Token rejected: forget it so the UI offers sign-in again.
-                    storage::delete_token();
-                    self.lock().token = None;
+                    self.forget_token();
                 }
                 self.publish();
                 if quota {
@@ -486,7 +530,7 @@ impl Native {
         let text = resp.final_text();
         let raw = resp.raw_text.clone().unwrap_or_default();
         let noise = resp.is_suspected_noise();
-        let (action, focus_at_stop, auto_insert, restore) = {
+        let (action, focus_at_stop, settings) = {
             let mut g = self.lock();
             let action = g
                 .core
@@ -504,12 +548,7 @@ impl Native {
             } else {
                 g.retained.take().and_then(|r| r.focus)
             };
-            (
-                action,
-                focus,
-                g.settings.auto_insert,
-                g.settings.restore_text_clipboard,
-            )
+            (action, focus, g.settings.clone())
         };
         match action {
             ResultAction::Ignore => return,
@@ -520,10 +559,15 @@ impl Native {
             ResultAction::Deliver { text } => {
                 let this = self.clone();
                 let job = job_id.to_string();
-                // Clipboard waits and SendInput must not block the async runtime.
+                // Clipboard waits and key injection must not block the async runtime.
                 std::thread::spawn(move || {
-                    let (outcome, notice) =
-                        this.deliver(&job, &text, focus_at_stop.as_ref(), auto_insert, restore);
+                    let is_current = || this.lock().core.is_current(&job);
+                    let (outcome, notice) = platform::deliver::deliver(
+                        &text,
+                        focus_at_stop.as_ref(),
+                        &settings,
+                        &is_current,
+                    );
                     {
                         let mut g = this.lock();
                         if g.core.delivered(&job, outcome) {
@@ -535,75 +579,6 @@ impl Native {
             }
         }
         self.spawn_refresh_account();
-    }
-
-    /// Focus check + clipboard + single Ctrl+V. Returns the outcome and an
-    /// optional reason code for the UI.
-    fn deliver(
-        &self,
-        job_id: &str,
-        text: &str,
-        at_stop: Option<&FocusSnapshot>,
-        auto_insert: bool,
-        restore: bool,
-    ) -> (InsertOutcome, Option<String>) {
-        if !auto_insert {
-            return match clipboard::write_text(text) {
-                Ok(_) => (InsertOutcome::ClipboardOnly, Some("auto_insert_off".into())),
-                Err(e) => (InsertOutcome::ClipboardOnly, Some(e)),
-            };
-        }
-        let now = focus::snapshot();
-        let decision = focus_policy::decide(at_stop, now.as_ref());
-        let copy_only = |reason: &str| -> (InsertOutcome, Option<String>) {
-            let _ = clipboard::write_text(text);
-            let outcome = if reason == "focus_changed" {
-                InsertOutcome::FocusChanged
-            } else {
-                InsertOutcome::ClipboardOnly
-            };
-            (outcome, Some(reason.to_string()))
-        };
-        match decision {
-            FocusDecision::Inject => {}
-            FocusDecision::Changed => return copy_only("focus_changed"),
-            FocusDecision::Unknown => return copy_only("focus_unknown"),
-            FocusDecision::Terminal => return copy_only("terminal"),
-            FocusDecision::Elevated => return copy_only("elevated"),
-            FocusDecision::OwnWindow => return copy_only("own_window"),
-            FocusDecision::Shell => return copy_only("shell"),
-        }
-        // Last-moment cancellation check right before touching the clipboard.
-        if !self.lock().core.is_current(job_id) {
-            return (InsertOutcome::ClipboardOnly, Some("cancelled".into()));
-        }
-        let previous = if restore {
-            clipboard::read_plain_text()
-        } else {
-            None
-        };
-        let seq = match clipboard::write_text(text) {
-            Ok(seq) => seq,
-            Err(e) => return (InsertOutcome::ClipboardOnly, Some(e)),
-        };
-        // Re-check focus once more right before sending the keys.
-        if focus_policy::decide(at_stop, focus::snapshot().as_ref()) != FocusDecision::Inject {
-            return (InsertOutcome::FocusChanged, Some("focus_changed".into()));
-        }
-        match inject::send_paste() {
-            Ok(()) => {
-                if let Some(prev) = previous {
-                    clipboard::restore_if_unchanged(&prev, seq, Duration::from_millis(800));
-                }
-                (InsertOutcome::DispatchedUnverified, None)
-            }
-            Err(inject::PasteError::ModifiersHeld) => {
-                (InsertOutcome::ClipboardOnly, Some("modifiers_held".into()))
-            }
-            Err(inject::PasteError::Blocked) => {
-                (InsertOutcome::ClipboardOnly, Some("input_blocked".into()))
-            }
-        }
     }
 }
 
@@ -631,8 +606,7 @@ impl Native {
             }
             Err(e) => {
                 if e.class == FailureClass::Auth {
-                    storage::delete_token();
-                    self.lock().token = None;
+                    self.forget_token();
                     self.publish();
                 }
                 Err(err_text(e))
@@ -645,7 +619,7 @@ impl Native {
     }
 
     /// Device login (§8.1). Opens the browser; the token goes straight into
-    /// Credential Manager and is never sent to the webview.
+    /// the OS secret store and is never sent to the webview.
     pub async fn login(self: &Arc<Self>, base_url: String) -> Result<LoginView, String> {
         let base = api::validate_base_url(&base_url)?;
         let client = ApiClient::new(&base)?;
@@ -731,7 +705,15 @@ impl Native {
                 api::PollStep::Expired => return finish(&self, Some("EXPIRED_TOKEN".into())),
                 api::PollStep::Failed(code) => return finish(&self, Some(code)),
                 api::PollStep::Token(t) => {
-                    if let Err(e) = storage::store_token(&t.access_token) {
+                    // The Secret Service may block on an unlock prompt: off the runtime.
+                    let (dir, token) = (self.config_dir(), t.access_token.clone());
+                    let stored = tauri::async_runtime::spawn_blocking(move || {
+                        storage::store_token(&dir, &token)
+                    })
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| r);
+                    if let Err(e) = stored {
                         return finish(&self, Some(e));
                     }
                     let saved = {
@@ -770,12 +752,8 @@ impl Native {
     }
 
     pub fn logout(&self) {
-        storage::delete_token();
-        {
-            let mut g = self.lock();
-            g.token = None;
-            g.account = None;
-        }
+        self.forget_token();
+        self.lock().account = None;
         self.publish();
     }
 
@@ -822,10 +800,9 @@ impl Native {
     pub async fn delete_data(self: &Arc<Self>) -> Result<(), String> {
         let (client, token) = self.client_and_token().map_err(err_text)?;
         client.delete_data(&token).await.map_err(err_text)?;
-        storage::delete_token();
+        self.forget_token();
         {
             let mut g = self.lock();
-            g.token = None;
             g.account = None;
             g.core.clear_last();
         }
@@ -845,6 +822,7 @@ impl Native {
             g.settings = next.clone();
             (next, old)
         };
+        #[cfg(windows)]
         if key == "hotkey" && settings.hotkey != old_hotkey {
             if let Err(e) = hotkey::rebind(self, &old_hotkey, &settings.hotkey) {
                 // Roll back to the previous working binding.
@@ -856,14 +834,142 @@ impl Native {
                 return Err(e);
             }
         }
+        #[cfg(not(windows))]
+        let _ = old_hotkey;
         if key == "ui_language" {
             tray::rebuild_menu(&self.app, &settings.ui_language);
         }
+        platform::setting_changed(&self.config_dir(), key, &settings);
         self.publish();
         Ok(settings)
     }
 
+    #[cfg(windows)]
     pub fn set_hotkey_error(&self, error: Option<String>) {
         self.lock().hotkey_error = error;
+    }
+
+    #[cfg(not(windows))]
+    pub fn set_hotkey_label(&self, label: Option<String>) {
+        self.lock().hotkey_label = label;
+    }
+
+    pub fn is_recording(&self) -> bool {
+        self.lock().core.phase() == Phase::Recording
+    }
+
+    /// Short local microphone test; never uploaded or stored.
+    pub fn mic_test(&self, millis: u64) -> Result<(f32, f32), String> {
+        if self.is_recording() {
+            return Err("Recording in progress".into());
+        }
+        audio::mic_test(&self.settings().mic_device, millis)
+    }
+}
+
+/// The managed orchestrator.
+pub fn native(app: &AppHandle) -> Arc<Native> {
+    app.state::<Arc<Native>>().inner().clone()
+}
+
+/// Command-line actions, from the first launch or forwarded by a second one
+/// (`scribiva --toggle` from the GNOME shortcut, `--cancel`, `--hidden`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaunchAction {
+    Toggle,
+    Cancel,
+    /// Start in the tray (autostart); nothing to do for a running instance.
+    Hidden,
+    /// Plain launch: show the window.
+    Show,
+}
+
+pub fn launch_action<S: AsRef<str>>(argv: &[S]) -> LaunchAction {
+    // argv[0] is the program; later flags win over earlier ones.
+    let mut action = LaunchAction::Show;
+    for a in argv.iter().skip(1) {
+        match a.as_ref() {
+            "--toggle" => action = LaunchAction::Toggle,
+            "--cancel" => action = LaunchAction::Cancel,
+            "--hidden" if action == LaunchAction::Show => action = LaunchAction::Hidden,
+            _ => {}
+        }
+    }
+    action
+}
+
+/// Run a launch action against the running instance. Recording work runs on
+/// its own thread (callers may be on the event loop or a D-Bus thread).
+pub fn run_launch_action(app: &AppHandle, action: LaunchAction) {
+    match action {
+        LaunchAction::Toggle | LaunchAction::Cancel => {
+            let Some(n) = app.try_state::<Arc<Native>>().map(|s| s.inner().clone()) else {
+                return;
+            };
+            std::thread::spawn(move || {
+                if action == LaunchAction::Toggle {
+                    n.toggle();
+                } else {
+                    n.cancel();
+                }
+            });
+        }
+        LaunchAction::Show => tray::show_main(app),
+        LaunchAction::Hidden => {}
+    }
+}
+
+/// Hide-to-tray on close; shared by both platforms.
+pub fn hide_on_close(window: &tauri::WebviewWindow) {
+    let w = window.clone();
+    window.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            api.prevent_close();
+            let _ = w.hide();
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn launch_actions() {
+        assert_eq!(launch_action(&["scribiva"]), LaunchAction::Show);
+        assert_eq!(
+            launch_action(&["scribiva", "--toggle"]),
+            LaunchAction::Toggle
+        );
+        assert_eq!(
+            launch_action(&["/usr/bin/scribiva", "--cancel"]),
+            LaunchAction::Cancel
+        );
+        assert_eq!(
+            launch_action(&["scribiva", "--hidden"]),
+            LaunchAction::Hidden
+        );
+        assert_eq!(
+            launch_action(&["scribiva", "--hidden", "--toggle"]),
+            LaunchAction::Toggle
+        );
+        assert_eq!(
+            launch_action(&["scribiva", "--toggle", "--hidden"]),
+            LaunchAction::Toggle
+        );
+        // argv[0] is never interpreted, unknown flags are ignored.
+        assert_eq!(launch_action(&["--toggle"]), LaunchAction::Show);
+        assert_eq!(launch_action(&["scribiva", "--evil"]), LaunchAction::Show);
+    }
+
+    #[test]
+    fn error_codes_are_split() {
+        let e = local_error("MIC_BUSY: device in use");
+        assert_eq!(
+            (e.code.as_str(), e.message.as_str()),
+            ("MIC_BUSY", "device in use")
+        );
+        let e = local_error("plain failure: details");
+        assert_eq!(e.code, "ERROR");
     }
 }

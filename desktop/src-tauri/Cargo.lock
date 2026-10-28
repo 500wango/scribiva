@@ -3589,6 +3589,7 @@ dependencies = [
  "cpal",
  "hound",
  "keyring",
+ "libc",
  "reqwest",
  "rustls",
  "serde",
@@ -3603,6 +3604,7 @@ dependencies = [
  "url",
  "uuid",
  "windows-sys 0.61.2",
+ "zbus",
 ]
 
 [[package]]

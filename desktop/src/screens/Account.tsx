@@ -7,34 +7,16 @@ import { formatLocal, formatSeconds } from '../i18n';
 import { errorText, Section, useApp } from '../ui';
 
 export function LoginPanel() {
-  const { backend, t, status, report, refreshStatus, refreshSettings } = useApp();
+  const { backend, t, status, report, refreshStatus } = useApp();
   const id = useId();
   const [url, setUrl] = useState(status?.serviceUrl || '');
-  const [lines, setLines] = useState<string[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [linuxError, setLinuxError] = useState('');
   useEffect(() => { if (status?.serviceUrl) setUrl(status.serviceUrl); }, [status?.serviceUrl]);
 
-  useEffect(() => {
-    let off = () => {};
-    backend.onLoginLines(
-      l => setLines(prev => [...prev, l].slice(-10)),
-      async (ok, error) => {
-        setBusy(false);
-        setLinuxError(ok ? '' : (error || 'login failed'));
-        await refreshStatus(); await refreshSettings();
-      },
-    ).then(f => { off = f; });
-    return () => off();
-  }, [backend, refreshStatus, refreshSettings]);
-
   async function start() {
-    setLines([]); setLinuxError('');
     try {
-      setBusy(!backend.isWindows);
       await backend.login(url.trim());
       await refreshStatus();
-    } catch (e) { setBusy(false); report(e); }
+    } catch (e) { report(e); }
   }
 
   const login = status?.login;
@@ -46,7 +28,7 @@ export function LoginPanel() {
           onChange={e => setUrl(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') start(); }} />
       </div>
       <div className="actions">
-        <button type="button" onClick={start} disabled={!url.trim() || busy || !!login}>{t('signIn')}</button>
+        <button type="button" onClick={start} disabled={!url.trim() || !!login}>{t('signIn')}</button>
         {login && <button type="button" className="soft" onClick={() => backend.cancelLogin().then(refreshStatus)}>{t('cancel')}</button>}
       </div>
       {login && (
@@ -59,10 +41,6 @@ export function LoginPanel() {
           </p>
         </div>
       )}
-      {!backend.isWindows && (busy || lines.length > 0) && (
-        <pre className="lastText small" aria-live="polite">{lines.join('\n') || t('loginWaiting')}</pre>
-      )}
-      {linuxError && <p className="error-text" role="alert">{linuxError}</p>}
     </div>
   );
 }

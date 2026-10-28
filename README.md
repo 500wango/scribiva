@@ -25,9 +25,11 @@ This is a **real, runnable Linux dictation core**, not a finished commercial rel
 sudo apt install ./scribiva_1.0.0_amd64.deb
 ```
 
-One package contains the desktop app, the dictation core (`scribiva-cli`), the Scribiva GNOME Shell extension and eitype; apt installs the runtime dependencies. Start **Scribiva** from the app menu and follow the setup guide: it binds Ctrl+Alt+V and enables the GNOME extension for your user (log out and back in once). Build the package with the steps in [`desktop/README.md`](desktop/README.md).
+One package contains the desktop app (Rust + Tauri, no Python), the Scribiva GNOME Shell extension and eitype; apt installs the runtime dependencies. Start **Scribiva** from the app menu and follow the setup guide: it binds Ctrl+Alt+V and enables the GNOME extension for your user (log out and back in once). Build the package with the steps in [`desktop/README.md`](desktop/README.md).
 
 ## Developer install from source
+
+The Python client under `src/scribiva/` is the original Linux prototype. It is kept for development and as a migration reference; the shipped desktop app no longer uses it (ADR-013).
 
 **Stop any currently active Gate 2B recording first.** From this repository root:
 

@@ -1,7 +1,8 @@
-//! Settings model and validation (platform independent), plus the Windows-only
-//! persistence: settings JSON in the app config dir and the `scr_` token in
-//! Windows Credential Manager. The token is never written to a plain file and
-//! never returned to the webview.
+//! Settings model and validation (platform independent), plus persistence:
+//! settings JSON in the app config dir and the `scr_` token in the OS secret
+//! store (Windows Credential Manager, Linux Secret Service). On Linux without
+//! a Secret Service the token falls back to a 0600 file in the config dir and
+//! diagnostics report it. The token is never returned to the webview.
 
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +38,11 @@ pub struct Settings {
     /// UI / tray language: `en` or `zh` (Simplified Chinese).
     pub ui_language: String,
     pub onboarding_done: bool,
+    /// Linux: paste even when the focused window cannot be identified.
+    pub insert_without_focus_check: bool,
+    /// Linux: XDG autostart entry (`scribiva --hidden`), written only once
+    /// onboarding is done.
+    pub start_at_login: bool,
 }
 
 impl Default for Settings {
@@ -55,6 +61,8 @@ impl Default for Settings {
             notifications: true,
             ui_language: "en".into(),
             onboarding_done: false,
+            insert_without_focus_check: false,
+            start_at_login: true,
         }
     }
 }
@@ -65,6 +73,24 @@ fn parse_bool(value: &str) -> Result<bool, String> {
         "false" | "0" => Ok(false),
         _ => Err("Expected true or false".into()),
     }
+}
+
+/// Keys that exist on the other platform only: hidden from the UI and
+/// refused by `apply` (Linux sets its shortcut in GNOME, see `linux::setup`).
+#[cfg(windows)]
+pub const OTHER_PLATFORM_KEYS: &[&str] = &["insert_without_focus_check", "start_at_login"];
+#[cfg(not(windows))]
+pub const OTHER_PLATFORM_KEYS: &[&str] = &["hotkey"];
+
+/// Settings as shown to the webview: platform-specific keys removed.
+pub fn settings_view(settings: &Settings) -> serde_json::Value {
+    let mut v = serde_json::to_value(settings).unwrap_or_default();
+    if let Some(obj) = v.as_object_mut() {
+        for k in OTHER_PLATFORM_KEYS {
+            obj.remove(*k);
+        }
+    }
+    v
 }
 
 impl Settings {
@@ -106,6 +132,9 @@ impl Settings {
         if value.len() > 512 {
             return Err("Value too long".into());
         }
+        if OTHER_PLATFORM_KEYS.contains(&key) {
+            return Err("Unsupported setting".into());
+        }
         match key {
             "language" if LANGUAGES.contains(&value) => self.language = value.into(),
             "mode" if MODES.contains(&value) => self.mode = value.into(),
@@ -115,6 +144,8 @@ impl Settings {
             "restore_text_clipboard" => self.restore_text_clipboard = parse_bool(value)?,
             "notifications" => self.notifications = parse_bool(value)?,
             "onboarding_done" => self.onboarding_done = parse_bool(value)?,
+            "insert_without_focus_check" => self.insert_without_focus_check = parse_bool(value)?,
+            "start_at_login" => self.start_at_login = parse_bool(value)?,
             "ui_language" if UI_LANGUAGES.contains(&value) => self.ui_language = value.into(),
             "mic_device" => {
                 if value.chars().any(char::is_control) {
@@ -223,11 +254,9 @@ fn normalize_key(upper: &str) -> Result<String, String> {
     }
 }
 
-#[cfg(windows)]
-pub use win::*;
+pub use persist::*;
 
-#[cfg(windows)]
-mod win {
+mod persist {
     use super::Settings;
     use std::path::{Path, PathBuf};
 
@@ -258,10 +287,10 @@ mod win {
 
     fn entry() -> Result<keyring::Entry, String> {
         keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
-            .map_err(|e| format!("Credential Manager unavailable: {e}"))
+            .map_err(|e| format!("Credential store unavailable: {e}"))
     }
 
-    pub fn load_token() -> Option<String> {
+    fn keyring_load() -> Option<String> {
         entry()
             .ok()?
             .get_password()
@@ -269,7 +298,13 @@ mod win {
             .filter(|t| crate::api::is_valid_token(t))
     }
 
-    pub fn store_token(token: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    pub fn load_token(_config_dir: &Path) -> Option<String> {
+        keyring_load()
+    }
+
+    #[cfg(windows)]
+    pub fn store_token(_config_dir: &Path, token: &str) -> Result<(), String> {
         if !crate::api::is_valid_token(token) {
             return Err("Invalid token".into());
         }
@@ -278,10 +313,96 @@ mod win {
             .map_err(|e| format!("Credential Manager: {e}"))
     }
 
-    pub fn delete_token() {
+    #[cfg(windows)]
+    pub fn delete_token(_config_dir: &Path) {
         if let Ok(e) = entry() {
             let _ = e.delete_credential();
         }
+    }
+
+    #[cfg(windows)]
+    pub fn token_backend(_config_dir: &Path) -> &'static str {
+        "credential-manager"
+    }
+
+    // ------------------------------------------------------------ Linux
+
+    /// Fallback token file, used only when no Secret Service is reachable.
+    #[cfg(not(windows))]
+    pub fn token_file(config_dir: &Path) -> PathBuf {
+        config_dir.join("service-token")
+    }
+
+    #[cfg(not(windows))]
+    pub fn load_token(config_dir: &Path) -> Option<String> {
+        keyring_load().or_else(|| {
+            std::fs::read_to_string(token_file(config_dir))
+                .ok()
+                .map(|t| t.trim().to_string())
+                .filter(|t| crate::api::is_valid_token(t))
+        })
+    }
+
+    #[cfg(not(windows))]
+    pub fn store_token(config_dir: &Path, token: &str) -> Result<(), String> {
+        if !crate::api::is_valid_token(token) {
+            return Err("Invalid token".into());
+        }
+        match entry().and_then(|e| e.set_password(token).map_err(|e| e.to_string())) {
+            Ok(()) => {
+                // A token in the secret store supersedes an older fallback file.
+                let _ = std::fs::remove_file(token_file(config_dir));
+                Ok(())
+            }
+            Err(_) => write_private(&token_file(config_dir), token),
+        }
+    }
+
+    #[cfg(not(windows))]
+    pub fn delete_token(config_dir: &Path) {
+        if let Ok(e) = entry() {
+            let _ = e.delete_credential();
+        }
+        let _ = std::fs::remove_file(token_file(config_dir));
+    }
+
+    /// `secret-service`, or `file` when the 0600 fallback file is in use.
+    #[cfg(not(windows))]
+    pub fn token_backend(config_dir: &Path) -> &'static str {
+        if token_file(config_dir).is_file() {
+            "file"
+        } else if keyring::Entry::store_status().is_ok() {
+            "secret-service"
+        } else {
+            "unavailable"
+        }
+    }
+
+    /// Owner-only file written atomically (created 0600, then renamed).
+    #[cfg(not(windows))]
+    pub fn write_private(path: &Path, content: &str) -> Result<(), String> {
+        use std::io::Write;
+        use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+        if let Some(dir) = path.parent() {
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(dir)
+                .map_err(|e| format!("Config dir: {e}"))?;
+        }
+        let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)
+            .map_err(|e| format!("Token file: {e}"))?;
+        f.write_all(content.as_bytes())
+            .and_then(|_| f.sync_all())
+            .map_err(|e| format!("Token file: {e}"))?;
+        drop(f);
+        std::fs::rename(&tmp, path).map_err(|e| format!("Token file: {e}"))
     }
 }
 
@@ -319,6 +440,42 @@ mod tests {
         assert!(s.apply("service_url", "https://x").is_err());
         assert!(s.apply("unknown", "1").is_err());
         assert!(s.apply("mic_device", "a\nb").is_err());
+        for k in OTHER_PLATFORM_KEYS {
+            assert!(s.apply(k, "true").is_err(), "{k}");
+        }
+    }
+
+    #[test]
+    fn view_hides_other_platform_keys() {
+        let v = settings_view(&Settings::default());
+        for k in OTHER_PLATFORM_KEYS {
+            assert!(v.get(*k).is_none(), "{k}");
+        }
+        assert!(v.get("mode").is_some());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn linux_only_settings() {
+        let mut s = Settings::default();
+        assert!(s.start_at_login && !s.insert_without_focus_check);
+        s.apply("insert_without_focus_check", "true").unwrap();
+        s.apply("start_at_login", "false").unwrap();
+        assert!(s.insert_without_focus_check && !s.start_at_login);
+        assert!(s.apply("hotkey", "Ctrl+Alt+B").is_err());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn private_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("scribiva-test-{}", std::process::id()));
+        let path = dir.join("sub").join("service-token");
+        write_private(&path, "scr_x").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "scr_x");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
