@@ -25,9 +25,10 @@ test ! -e /usr/lib/scribiva/src && echo "PASS no Python core shipped"
 dpkg-query -W -f="\${Depends}" scribiva | grep -qv python3 && echo "PASS no python3 dependency"
 grep -q -- '--toggle' /usr/bin/scribiva-cli && echo "PASS legacy shortcut shim forwards to the app"
 /usr/lib/scribiva/bin/eitype --version | grep -q "0.2.2" && echo "PASS eitype runs"
-test -f /usr/share/gnome-shell/extensions/scribiva@scribiva.app/metadata.json \
-  && grep -q InsertText /usr/share/gnome-shell/extensions/scribiva@scribiva.app/extension.js \
-  && echo "PASS extension v2 installed system-wide"
+EXT=/usr/share/gnome-shell/extensions/scribiva@scribiva.app
+IMPL="$EXT/impl-$(cat "$EXT/impl-version.txt").js"
+test -f "$EXT/metadata.json" && grep -q Loader1 "$EXT/extension.js" \
+  && grep -q InsertText "$IMPL" && echo "PASS extension loader + versioned implementation installed"
 missing=$(ldd /usr/bin/scribiva /usr/lib/scribiva/bin/eitype | grep -c "not found" || true)
 [ "$missing" = 0 ] && echo "PASS shared libraries resolve"
 for tool in pw-record pw-dump wl-copy wl-paste; do command -v $tool >/dev/null || { echo "FAIL missing $tool"; exit 1; }; done

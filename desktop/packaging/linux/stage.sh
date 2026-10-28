@@ -14,8 +14,15 @@ EITYPE_VERSION="0.2.2"
 rm -rf "$STAGE"
 mkdir -p "$STAGE/lib/bin" "$STAGE/doc"
 
-# GNOME Shell extension (ADR-012).
-cp -R "$ROOT/extensions/gnome-shell/scribiva@scribiva.app" "$STAGE/extension"
+# GNOME Shell extension (ADR-012). The loader (extension.js) is cached by the
+# shell for the whole session; the implementation is shipped under a
+# content-derived name so the app can load a new one without a logout.
+EXT_SRC="$ROOT/extensions/gnome-shell/scribiva@scribiva.app"
+mkdir -p "$STAGE/extension"
+cp "$EXT_SRC/extension.js" "$EXT_SRC/metadata.json" "$EXT_SRC/stylesheet.css" "$STAGE/extension/"
+IMPL_VERSION="$(sha256sum "$EXT_SRC/impl.js" | cut -c1-12)"
+cp "$EXT_SRC/impl.js" "$STAGE/extension/impl-$IMPL_VERSION.js"
+printf '%s\n' "$IMPL_VERSION" > "$STAGE/extension/impl-version.txt"
 
 # eitype (Apache-2.0) for paste on GNOME/KDE Wayland via libei.
 if [ -z "${EITYPE_BIN:-}" ]; then

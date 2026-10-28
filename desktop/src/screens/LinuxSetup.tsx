@@ -70,7 +70,8 @@ export function LinuxSetup() {
           )}
         </div>
       )}
-      {(relogin || extState === 'pending') && <p className="warning-text" role="status">{t('lx_relogin')}</p>}
+      {(relogin || extState === 'pending') && <p className="muted" role="status">{t('lx_relogin')}</p>}
+      {ext.update_at_next_login && <p className="muted" role="status">{t('lx_ext_update')}</p>}
       {error && <p className="error-text" role="alert">{error}</p>}
     </div>
   );

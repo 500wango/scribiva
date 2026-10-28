@@ -471,6 +471,10 @@ pub struct ExtensionStatus {
     pub version: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub needs_relogin: Option<bool>,
+    /// The running extension predates the hot-reload loader, so it cannot be
+    /// updated in place; the installed version takes over at the next login.
+    #[serde(default)]
+    pub update_at_next_login: bool,
 }
 
 fn string_list(r: &dyn Runner, schema: &str, key: &str) -> Result<Vec<String>, String> {
@@ -549,6 +553,7 @@ pub fn enable_extension(
         active,
         version,
         needs_relogin: Some(enabled && !active),
+        update_at_next_login: false,
     })
 }
 
@@ -569,12 +574,19 @@ fn active_probe() -> (bool, u32) {
 
 pub fn extension_status(r: &dyn Runner) -> ExtensionStatus {
     let (active, version) = active_probe();
+    let loader = if active {
+        super::shell::loader_state()
+    } else {
+        None
+    };
     ExtensionStatus {
         installed: extension_installed(),
         enabled: extension_enabled(r),
         active,
         version,
         needs_relogin: None,
+        update_at_next_login: super::shell::extension_action(loader.as_ref())
+            == super::shell::ExtensionAction::NeedsLogout,
     }
 }
 

@@ -7,6 +7,7 @@ uuid="scribiva@scribiva.app"
 
 mkdir -p "$here/dist"
 gnome-extensions pack "$here/$uuid" \
+    --extra-source=impl.js \
     --force \
     --out-dir="$here/dist"
 

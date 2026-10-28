@@ -54,3 +54,22 @@ bash test/manual-check.sh
 ```
 
 `test/run.sh` 是无头 GNOME Shell 测试：扩展能加载、D-Bus 接口可用；但在开发机上 GTK 测试窗口在无头会话里无法完成 Wayland 初始化，输入部分需用上面的真机检查。
+
+## 不注销也能更新（热加载）
+
+GNOME Shell 每个会话只导入一次扩展的主文件，并且一直缓存。为此扩展拆成两层：
+
+- `extension.js`：加载器，很小，几乎不改。它占用总线名，并提供 `app.scribiva.Loader1` 接口（对象 `/app/scribiva/Loader`）：`Reload()`、属性 `LoaderVersion`、`ImplVersion`、`AvailableImplVersion`。
+- `impl.js`：全部功能。安装包里以 `impl-<内容哈希>.js` 发布，`impl-version.txt` 记录当前版本。文件名每个版本都不同，所以能在运行中的 Shell 里导入新版本。
+
+Scribiva 应用启动时会比较正在运行的实现和已安装的实现，不一致就调用 `Reload()`，新代码立刻生效，不需要注销，其他应用不受影响。`Reload()` 只会从扩展自己的系统目录（root 所有）加载，版本号只允许 `[A-Za-z0-9._-]`。
+
+只有两种情况需要等下次登录：第一次安装扩展（GNOME 登录时才扫描扩展目录），以及加载器 `extension.js` 本身有改动。这两种情况下 Scribiva 照常工作，只是改用剪贴板粘贴，界面会说明“下次登录时生效”，不会要求立即注销。
+
+开发时：
+
+```bash
+bash dev.sh install   # 第一次：安装开发用加载器，下次登录生效
+bash dev.sh reload    # 之后每次改 impl.js：立即生效
+bash dev.sh nested    # 改加载器时：在窗口里开一个独立的 GNOME Shell
+```

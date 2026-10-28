@@ -174,7 +174,7 @@ export type LinuxSetup = {
   /** Command the shortcut runs, for manual setup on other desktops. */
   command: string;
   hotkey: { available: boolean; installed: boolean; broken?: boolean; binding?: string; label?: string };
-  extension: { installed: boolean; enabled: boolean; active: boolean; version: number };
+  extension: { installed: boolean; enabled: boolean; active: boolean; version: number; update_at_next_login?: boolean };
 };
 export type LinuxSetupResult = {
   status: LinuxSetup;

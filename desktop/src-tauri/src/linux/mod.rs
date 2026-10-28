@@ -142,6 +142,9 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     std::thread::spawn(move || {
         let _ = setup::repair_hotkey(&setup::System, &setup::toggle_command());
         refresh_hotkey_label(&n);
+        // After a package update, load the new extension implementation into
+        // the running GNOME Shell: no logout, other apps keep running.
+        shell::sync_extension();
     });
     Ok(())
 }

@@ -96,6 +96,112 @@ fn parse_version(value: &Value<'_>) -> u32 {
     }
 }
 
+pub const LOADER_PATH: &str = "/app/scribiva/Loader";
+pub const LOADER_INTERFACE: &str = "app.scribiva.Loader1";
+
+/// Loader state: which implementation is running and which is installed.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct LoaderState {
+    pub loader: bool,
+    pub running: String,
+    pub available: String,
+}
+
+fn loader_property(conn: &Connection, name: &str) -> Option<String> {
+    let msg = conn
+        .call_method(
+            Some(BUS_NAME),
+            LOADER_PATH,
+            Some("org.freedesktop.DBus.Properties"),
+            "Get",
+            &(LOADER_INTERFACE, name),
+        )
+        .ok()?;
+    let value = msg.body().deserialize::<OwnedValue>().ok()?;
+    string_value(&value)
+}
+
+fn string_value(value: &Value<'_>) -> Option<String> {
+    match value {
+        Value::Str(s) => Some(s.as_str().trim().to_string()),
+        Value::Value(inner) => string_value(inner),
+        _ => None,
+    }
+}
+
+/// `None` when no extension is on the bus. `loader: false` means an extension
+/// from before the hot-reload loader is running (one logout upgrades it).
+pub fn loader_state() -> Option<LoaderState> {
+    let conn = shared().ok()?;
+    match loader_property(&conn, "LoaderVersion") {
+        Some(_) => Some(LoaderState {
+            loader: true,
+            running: loader_property(&conn, "ImplVersion").unwrap_or_default(),
+            available: loader_property(&conn, "AvailableImplVersion").unwrap_or_default(),
+        }),
+        None if version() > 0 => Some(LoaderState {
+            loader: false,
+            running: String::new(),
+            available: String::new(),
+        }),
+        None => None,
+    }
+}
+
+/// Ask the running loader to import the installed implementation, without a
+/// logout. Returns the implementation version now running.
+pub fn reload_implementation() -> Result<String, String> {
+    let conn = connect(Duration::from_secs(10))?;
+    let msg = conn
+        .call_method(
+            Some(BUS_NAME),
+            LOADER_PATH,
+            Some(LOADER_INTERFACE),
+            "Reload",
+            &(),
+        )
+        .map_err(|e| e.to_string())?;
+    reset_shared();
+    msg.body()
+        .deserialize::<String>()
+        .map_err(|e| e.to_string())
+}
+
+/// What the app should do about the extension after start or an update.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtensionAction {
+    /// Nothing on the bus (not installed, disabled, or never loaded).
+    None,
+    /// Running implementation differs from the installed one: hot reload.
+    Reload,
+    /// Up to date.
+    Current,
+    /// Pre-loader extension running: only a logout can replace it.
+    NeedsLogout,
+}
+
+pub fn extension_action(state: Option<&LoaderState>) -> ExtensionAction {
+    match state {
+        None => ExtensionAction::None,
+        Some(s) if !s.loader => ExtensionAction::NeedsLogout,
+        Some(s) if !s.available.is_empty() && s.running != s.available => ExtensionAction::Reload,
+        Some(_) => ExtensionAction::Current,
+    }
+}
+
+/// Bring the running extension up to the installed implementation when that
+/// is possible without a logout. Returns the resulting action for diagnostics.
+pub fn sync_extension() -> ExtensionAction {
+    let state = loader_state();
+    let action = extension_action(state.as_ref());
+    if action == ExtensionAction::Reload {
+        if let Err(e) = reload_implementation() {
+            eprintln!("Scribiva: extension reload failed: {e}");
+        }
+    }
+    action
+}
+
 /// Best-effort top-bar indicator: `idle|recording|processing|error`.
 pub fn set_state(phase: &str) {
     if let Ok(conn) = shared() {
@@ -210,6 +316,34 @@ pub fn extension_active() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extension_actions() {
+        use super::{extension_action, ExtensionAction, LoaderState};
+        let st = |loader: bool, running: &str, available: &str| LoaderState {
+            loader,
+            running: running.into(),
+            available: available.into(),
+        };
+        assert_eq!(extension_action(None), ExtensionAction::None);
+        assert_eq!(
+            extension_action(Some(&st(false, "", ""))),
+            ExtensionAction::NeedsLogout
+        );
+        assert_eq!(
+            extension_action(Some(&st(true, "aaa", "bbb"))),
+            ExtensionAction::Reload
+        );
+        assert_eq!(
+            extension_action(Some(&st(true, "bbb", "bbb"))),
+            ExtensionAction::Current
+        );
+        // Source checkout: no installed version file, dev implementation runs.
+        assert_eq!(
+            extension_action(Some(&st(true, "dev-1", ""))),
+            ExtensionAction::Current
+        );
+    }
 
     #[test]
     fn version_values() {
