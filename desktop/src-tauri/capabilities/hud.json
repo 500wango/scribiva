@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "hud-capability",
+  "description": "Recording HUD: may only listen to Scribiva's status events (it reads state through the `status` command). No window, shell, fs, http or updater access.",
+  "windows": ["hud"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+}

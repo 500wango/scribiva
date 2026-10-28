@@ -13,6 +13,8 @@ export type Phase =
 
 export type ErrorInfo = { code: string; message: string; class?: string; retryable?: boolean };
 export type LoginView = { user_code: string; verification_uri: string; expires_at_ms: number; error?: string | null };
+/** Signed update state (FR-012). `url` is a fixed release page for system installs. */
+export type UpdateView = { version: string; state: 'downloading' | 'ready' | 'manual' | 'failed'; url?: string | null; error?: string | null };
 
 export type Status = {
   phase: Phase;
@@ -27,7 +29,16 @@ export type Status = {
   signedIn: boolean;
   serviceUrl: string;
   login?: LoginView | null;
+  /** The last result can be inserted on explicit request (never automatic). */
+  canInsert: boolean;
+  /** The no-focus recording HUD works on this platform/session. */
+  hudSupported: boolean;
+  update?: UpdateView | null;
 };
+
+export type Action =
+  | 'toggle' | 'cancel' | 'retry' | 'discard' | 'copy-last' | 'copy-raw' | 'clear-last' | 'acknowledge'
+  | 'insert-last' | 'discard-last' | 'check-update' | 'install-update' | 'open-release-page';
 
 export type Settings = Record<string, string | number | boolean>;
 export type Device = { id: string; label: string; isDefault: boolean };
@@ -54,6 +65,7 @@ type RawStatus = {
   phase: Phase; error: ErrorInfo | null; notice: string | null; can_retry: boolean;
   recording_started_ms: number | null; max_record_seconds: number; signed_in: boolean;
   service_url: string; hotkey: string; hotkey_error: string | null; login: LoginView | null;
+  can_insert: boolean; hud_supported: boolean; update: UpdateView | null;
 };
 
 function fromRaw(s: RawStatus): Status {
@@ -61,7 +73,8 @@ function fromRaw(s: RawStatus): Status {
     phase: s.phase, error: s.error, notice: s.notice, canRetry: s.can_retry,
     recordingStartedMs: s.recording_started_ms, maxRecordSeconds: s.max_record_seconds,
     hotkey: s.hotkey, hotkeyError: s.hotkey_error, signedIn: s.signed_in,
-    serviceUrl: s.service_url, login: s.login,
+    serviceUrl: s.service_url, login: s.login, canInsert: Boolean(s.can_insert),
+    hudSupported: Boolean(s.hud_supported), update: s.update,
   };
 }
 
@@ -108,8 +121,13 @@ export class Backend {
     return { available: l.available, text: l.text || '', raw: l.raw || '', warnings: l.warnings || [], suspectedNoise: Boolean(l.suspected_noise), outcome: l.outcome };
   }
 
-  async action(name: 'toggle' | 'cancel' | 'retry' | 'discard' | 'copy-last' | 'copy-raw' | 'clear-last' | 'acknowledge'): Promise<void> {
+  async action(name: Action): Promise<void> {
     await invoke('action', { name });
+  }
+
+  /** False while the build has no real update signing key (checks disabled). */
+  async updatesEnabled(): Promise<boolean> {
+    try { return await invoke<boolean>('updates_enabled'); } catch { return false; }
   }
 
   async login(url: string): Promise<LoginView> {
@@ -153,7 +171,7 @@ export class Backend {
     return invoke<LinuxSetup>('setup_status');
   }
 
-  async linuxSetup(action: 'hotkey' | 'extension', binding?: string): Promise<LinuxSetupResult> {
+  async linuxSetup(action: 'hotkey' | 'extension' | 'kwin', binding?: string): Promise<LinuxSetupResult> {
     return invoke<LinuxSetupResult>('setup', { action, binding: binding ?? null });
   }
 }
@@ -175,6 +193,7 @@ export type LinuxSetup = {
   command: string;
   hotkey: { available: boolean; installed: boolean; broken?: boolean; binding?: string; label?: string };
   extension: { installed: boolean; enabled: boolean; active: boolean; version: number; update_at_next_login?: boolean };
+  kwin?: { kde: boolean; kwin_script_installed: boolean; kwin_script_enabled: boolean; kwin_focus_active: boolean };
 };
 export type LinuxSetupResult = {
   status: LinuxSetup;

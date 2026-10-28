@@ -1,14 +1,16 @@
 // First-run flow (docs/06 §4): value, privacy notice (US + Groq), sign-in,
-// microphone test, hotkey (Linux: GNOME shortcut + extension setup).
+// microphone test, preferences (language, mode, insertion, HUD, start at
+// login), hotkey (Linux: GNOME shortcut + extension setup).
 import { useState } from 'react';
+import { SPEECH_LANGUAGES } from '../i18n';
+import { has, Select, Toggle, useApp } from '../ui';
 import { LoginPanel } from './Account';
 import { MicTest } from './Settings';
 import { LinuxSetup } from './LinuxSetup';
-import { useApp } from '../ui';
 
 export function Onboarding({ onDone }: { onDone: () => void }) {
-  const { backend, t, status, setSetting } = useApp();
-  const steps = ['privacy', 'login', 'mic', 'hotkey'] as const;
+  const { backend, t, status, settings, setSetting } = useApp();
+  const steps = ['privacy', 'login', 'mic', 'prefs', 'hotkey'] as const;
   const [i, setI] = useState(0);
   const [agreed, setAgreed] = useState(false);
   const step = steps[i];
@@ -30,6 +32,11 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
           <>
             <h2>{t('ob_privacy_title')}</h2>
             <p>{t('ob_privacy')}</p>
+            <dl className="facts">
+              <dt>{t('privacyRegion')}</dt><dd>{t('privacyRegionValue')}</dd>
+              <dt>{t('privacyProviders')}</dt><dd>{t('privacyProvidersValue')}</dd>
+            </dl>
+            <p className="muted">{t('ob_privacy_outcome')}</p>
             <label className="check">
               <input type="checkbox" checked={agreed} onChange={e => setAgreed(e.target.checked)} />
               <span>{t('ob_agree')}</span>
@@ -38,6 +45,28 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         )}
         {step === 'login' && (<><h2>{t('ob_login_title')}</h2><LoginPanel /></>)}
         {step === 'mic' && (<><h2>{t('ob_mic_title')}</h2><MicTest /></>)}
+        {step === 'prefs' && settings && (
+          <>
+            <h2>{t('sec_writing')}</h2>
+            <Select label={t('speechLanguage')} value={String(settings.language ?? 'auto')}
+              onChange={v => setSetting('language', v)}
+              options={[['auto', t('autoDetect')], ...SPEECH_LANGUAGES]} />
+            <Select label={t('mode')} value={String(settings.mode ?? 'standard')} onChange={v => setSetting('mode', v)}
+              help={settings.mode === 'polished' ? t('polishedWarn') : undefined}
+              options={[['raw', t('mode_raw')], ['standard', t('mode_standard')], ['polished', t('mode_polished')]]} />
+            {has(settings, 'auto_insert') && (
+              <Toggle label={t('autoInsert')} checked={settings.auto_insert === true} risk={t('autoInsertRisk')}
+                onChange={v => setSetting('auto_insert', v)} />
+            )}
+            {has(settings, 'show_hud') && status?.hudSupported && (
+              <Toggle label={t('showHud')} checked={settings.show_hud === true} onChange={v => setSetting('show_hud', v)} />
+            )}
+            {has(settings, 'start_at_login') && (
+              <Toggle label={backend.isWindows ? t('startAtLoginWin') : t('startAtLogin')}
+                checked={settings.start_at_login === true} onChange={v => setSetting('start_at_login', v)} />
+            )}
+          </>
+        )}
         {step === 'hotkey' && (
           <>
             <h2>{t('ob_hotkey_title')}</h2>

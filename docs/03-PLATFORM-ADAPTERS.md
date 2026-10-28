@@ -38,6 +38,8 @@
 
 **焦点信息来源（ADR-012）**：GNOME Wayland 由 Scribiva GNOME Shell 扩展经会话 D-Bus 提供焦点窗口 ID；KDE Plasma Wayland 由 KWin 脚本提供；X11 读取 `_NET_ACTIVE_WINDOW`；wlroots 合成器按其 IPC（如 Sway/Hyprland）实现，未实现前为 `unknown`。终端类窗口（按应用 ID 识别）默认只复制，不发送粘贴快捷键。
 
+**KDE Plasma Wayland（已实现）**：随包安装 KWin 脚本 `scribiva-focus`，每次窗口切换通过 D-Bus 报告给应用（`app.scribiva.Desktop` / `app.scribiva.Focus1.Activated`，只含应用 ID、窗口 UUID、pid，不含标题）。应用只接受当前 `org.kde.KWin` 发来的调用。启用后由 KWin 立即加载，不需要注销。KWin 没有输入法提交接口，插入走「再次核对焦点 → wl-copy + eitype 粘贴」。
+
 **X11 会话现状**：Ubuntu 26.04（GNOME 50）与 KDE Plasma 6.8 已不再提供 X11 会话，X11 支持主要面向仍以 X11 为主的桌面（如 Cinnamon、Xfce、MATE）。
 
 **重要区别**：`wtype` 适用于实现虚拟键盘协议的某些 wlroots 合成器，不能假定 GNOME/KDE 原生 Wayland 支持。`eitype` 使用 libei/EI；`dotool` 和 `ydotool` 通过 uinput 及相应权限提供备用方式。Voxtype 当前默认链 `wtype → eitype → dotool → ydotool → clipboard → xclip` 可作为策略参考，但 Scribiva 应按场景选择顺序，不能盲目逐一调用导致重复输入。

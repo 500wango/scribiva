@@ -115,3 +115,76 @@ LOG_LEVEL=info
 - [ ] 失败路径可恢复；更新和卸载清理测试通过。
 - [ ] 版本、commit、构建日期和兼容矩阵在发布说明可追溯。
 
+
+## 8. CI 与发布流程
+
+第 2 节是目标形态；本节描述仓库里**已经存在**的实现：`.github/workflows/ci.yml`、`.github/workflows/release.yml` 和 `scripts/release/`。所有第三方 Action 都按完整 commit SHA 固定（注释里写版本号），升级时同时改 SHA 和注释。
+
+### 8.1 CI（push 到 `main` / `v1-dev`、所有 PR）
+
+| Job | Runner | 内容 |
+|---|---|---|
+| `python` | ubuntu-24.04 | ruff 0.15.21（`.github/ci-requirements.txt`，带哈希）；`unittest` 全套（装 ffmpeg 以覆盖 FLAC）；`scripts/release` 自测；`tests/test_install.sh`、`tests/test_e2e_simulated.sh` |
+| `desktop-linux` | ubuntu-24.04 | Tauri 2 系统依赖、Node 24、`npm ci`、`npm run build`、`cargo fmt --check`、`cargo clippy --all-targets -D warnings`、`cargo test`（都带 `--locked`） |
+| `desktop-windows` | windows-2022 | `npm ci`、`npm run build`、clippy、`cargo test` |
+| `extension` | ubuntu-24.04 | `node --input-type=module --check` 检查 `extension.js` / `impl.js` 语法；`scripts/release/check_extension.py` 校验 `metadata.json` 并按 `build.sh` 的文件集打包、回读 zip |
+| `landing` | ubuntu-24.04 | `scripts/release/check_landing.py landing`：HTML 结构、相对链接与锚点可解析、脚本/样式/图片/iframe 不引用外部 URL（FR-015）|
+
+Rust 工具链固定为 `RUST_TOOLCHAIN`（当前 1.96.1），升级时先在本机跑一遍 clippy。CI 只有 `contents: read` 权限，不接触任何签名密钥。
+
+### 8.2 发布：tag → 草稿 Release → 人工审核发布
+
+1. 改版本号（8 处：`desktop/package.json`、`package-lock.json` 两处、`Cargo.toml`、`Cargo.lock`、`tauri.conf.json`、两个 Python `__init__.py`）：
+   ```bash
+   python3 scripts/release/bump_version.py --dry-run 1.0.1   # 先看
+   python3 scripts/release/bump_version.py 1.0.1
+   ```
+   非 SemVer 会被拒绝。提交后打带说明的 tag 并推送：`git tag -a v1.0.1 -m "说明"`、`git push origin v1.0.1`。
+2. `release.yml` 依次执行：
+   - `verify`：`bump_version.py --check` 确认 tag 与所有版本字段一致，不一致直接失败；
+   - `linux-deb`：`desktop/packaging/linux/stage.sh`（未设置 `EITYPE_BIN` 时用 `cargo install --locked eitype@0.2.2` 构建）→ `npx tauri build --bundles deb` → `test-deb.sh` 在 runner 的 Docker 里用干净的 `ubuntu:24.04` 安装/卸载验证；
+   - `windows-nsis`：`npx tauri build --bundles nsis`，可选 Authenticode 签名，可选 updater 签名；
+   - `draft-release`：生成 `latest.json`（仅当 updater 已配置）、`SHA256SUMS`，创建 **草稿** Release 并上传全部制品。
+3. 维护者在 GitHub Releases 页面检查草稿：文件名、SHA-256、签名状态、发布说明，在真机上安装验证（第 7 节清单），然后**手动**点 Publish。工作流从不自动发布；对已发布的 Release 重跑工作流会直接失败，不会覆盖。
+
+发布构建不使用依赖缓存，只从锁文件重新构建。`draft-release` 是唯一拥有 `contents: write` 的 job。
+
+### 8.3 需要配置的 Secrets 与变量
+
+签名密钥只放在仓库的 `release` environment（Settings → Environments，建议加 required reviewers 并限制只允许 `v*` tag），`windows-nsis` job 使用这个 environment。
+
+| 名称 | 类型 | 用途 | 缺失时 |
+|---|---|---|---|
+| `TAURI_SIGNING_PRIVATE_KEY` | secret | updater 私钥（`tauri signer generate` 输出的私钥内容） | 若 `tauri.conf.json` 已配置 `plugins.updater.pubkey`：发布**失败**；未配置 pubkey：不生成 `.sig` 和 `latest.json`，只打警告 |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | secret | 私钥口令 | 无口令的私钥可以不设 |
+| `WINDOWS_CERTIFICATE` | secret | 代码签名证书 PFX 的 base64（`base64 -w0 cert.pfx`） | 不签名，构建仍成功，Release 说明和 `latest.json` 注明 "Unsigned build — SmartScreen will warn" |
+| `WINDOWS_CERTIFICATE_PASSWORD` | secret | PFX 口令 | 同上（两个都设置才签名） |
+| `WINDOWS_TIMESTAMP_URL` | variable（可选） | RFC 3161 时间戳服务 | 默认 `http://timestamp.digicert.com` |
+| `RELEASE_DOWNLOAD_BASE_URL` | variable（可选） | 下载地址前缀，写入 `latest.json` 和 config.js 片段 | 默认 GitHub Release 下载地址 |
+
+注意：基于 PFX 的签名只适用于仍允许导出私钥的证书。2023 年 6 月以后新签发的 OV/EV 证书通常要求私钥在硬件令牌或云 HSM 里，那时需要把 `Import code-signing certificate` 步骤换成供应商的签名服务（`bundle.windows.signCommand`）。
+
+### 8.4 Tauri updater 密钥
+
+```bash
+cd desktop
+npx tauri signer generate -w ~/.tauri/scribiva-updater.key   # 交互输入口令
+```
+
+- 私钥 `~/.tauri/scribiva-updater.key`：内容存为 secret `TAURI_SIGNING_PRIVATE_KEY`，口令存为 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`；另做离线备份。私钥丢失后已安装的客户端将无法再验证任何更新。
+- 公钥 `~/.tauri/scribiva-updater.key.pub`：内容写入 `desktop/src-tauri/tauri.conf.json` 的 `plugins.updater.pubkey`（同时配置 `endpoints`，并启用 `requireSignedVersion`），随代码提交。应用内置这把公钥来验证下载的安装包。
+- 写入 pubkey 后，发布工作流自动开启 `bundle.createUpdaterArtifacts`：NSIS 安装包旁会生成 `*.exe.sig`，`scripts/release/make_latest_json.py` 读取它生成 Tauri v2 静态 `latest.json`（`version`、`notes`、`pub_date`、`platforms.windows-x86_64.{signature,url}`）。脚本会检查签名的文件名、版本和密钥 ID 与 `tauri.conf.json` 中的公钥一致，避免把错误的签名发出去。
+- 目前桌面端尚未接入 `tauri-plugin-updater`，所以工作流在没有 pubkey 时跳过 updater 制品。
+
+### 8.5 Linux 更新渠道
+
+`.deb` 不经过应用内 updater（`latest.json` 不包含 Linux，`make_latest_json.py` 会拒绝 `.deb`/`.rpm`）：用户从官网下载新版本，或在提供 APT 源后通过 `apt upgrade` 更新。这样避免包管理器与应用内更新同时改写 `/usr` 下的文件（第 4 节）。
+
+### 8.6 更新 landing page 下载信息
+
+草稿 Release 的说明末尾有一段可直接复制的 `landing/assets/config.js` 片段，包含 `version`、`windows_url`、`windows_sha256`、`linux_deb_url`、`linux_deb_sha256`（SHA-256 与 `SHA256SUMS` 相同）。发布后：
+
+1. 若安装包要放在 Scribiva 自有域名（推荐，保证大陆可访问），先上传到镜像，并在发布前设置变量 `RELEASE_DOWNLOAD_BASE_URL`，或手动替换片段里的 URL；
+2. 把片段写入 `landing/assets/config.js`，`release_state` 改为 `"available"`；
+3. 同步 `landing/README.md` 提到的页面后备文字和下载区示例文件名；
+4. 本地运行 `python3 scripts/release/check_landing.py landing` 后再部署。

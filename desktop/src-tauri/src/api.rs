@@ -375,6 +375,29 @@ pub fn transport_error(message: impl Into<String>) -> ErrorInfo {
     }
 }
 
+/// Insertion outcomes the server accepts for `POST /v1/dictations/{id}/outcome`.
+pub const OUTCOMES: &[&str] = &[
+    "inserted",
+    "dispatched_unverified",
+    "clipboard_only",
+    "focus_changed",
+    "suspected_noise",
+    "own_window",
+];
+
+pub fn is_outcome(outcome: &str) -> bool {
+    OUTCOMES.contains(&outcome)
+}
+
+/// Server job ids go into a URL path: allow only URL-safe id characters.
+pub fn is_safe_job_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
 /// Parse `Retry-After` seconds, bounded so a hostile value cannot stall us.
 pub fn retry_after_seconds(header: Option<&str>) -> u64 {
     header
@@ -399,7 +422,8 @@ mod client {
     #[derive(Debug, Clone)]
     pub struct DictationRequest {
         pub job_id: String,
-        pub wav: Vec<u8>,
+        /// FLAC (preferred, §8.3) or WAV fallback, encoded from the retained WAV.
+        pub audio: crate::audio_dsp::UploadAudio,
         pub duration_ms: u64,
         pub language: String,
         pub grammar_mode: String,
@@ -574,6 +598,23 @@ mod client {
                 .await;
         }
 
+        /// Best-effort insertion-outcome report (north-star metric, docs/11):
+        /// only the enum, never text or app. 401/404 and network errors
+        /// are ignored.
+        pub async fn report_outcome(&self, token: &str, job_id: &str, outcome: &str) {
+            if !is_outcome(outcome) || !is_safe_job_id(job_id) {
+                return;
+            }
+            let _ = self
+                .http
+                .post(self.url(&format!("/v1/dictations/{job_id}/outcome")))
+                .bearer_auth(token)
+                .json(&serde_json::json!({ "outcome": outcome }))
+                .timeout(Duration::from_secs(10))
+                .send()
+                .await;
+        }
+
         /// Upload one recording and wait for its result. `still_current` is
         /// checked between network steps so cancelled jobs stop early.
         pub async fn dictate(
@@ -587,9 +628,9 @@ mod client {
                 if !still_current() {
                     return Err(CallError::Cancelled);
                 }
-                let audio = multipart::Part::bytes(req.wav.clone())
-                    .file_name("audio.wav")
-                    .mime_str("audio/wav")
+                let audio = multipart::Part::bytes(req.audio.bytes.clone())
+                    .file_name(req.audio.file_name)
+                    .mime_str(req.audio.mime)
                     .map_err(|e| CallError::Http(transport_error(e.to_string())))?;
                 let mut form = multipart::Form::new()
                     .part("audio", audio)
@@ -885,6 +926,21 @@ mod tests {
         let e = map_dictation_error(410, &err_body("RESULT_EXPIRED"));
         assert_eq!(e.class, FailureClass::Server);
         assert_eq!(e.message, "msg");
+    }
+
+    #[test]
+    fn outcome_values_and_job_ids() {
+        for o in OUTCOMES {
+            assert!(is_outcome(o));
+        }
+        assert!(!is_outcome("verified"));
+        assert!(is_safe_job_id("job_0123-abc"));
+        assert!(is_safe_job_id("3f0c1d2e-9a7b-4c1d-8e2f-0a1b2c3d4e5f"));
+        assert!(!is_safe_job_id(""));
+        assert!(!is_safe_job_id("../me/data"));
+        assert!(!is_safe_job_id("a/b"));
+        assert!(!is_safe_job_id("a?b"));
+        assert!(!is_safe_job_id(&"a".repeat(129)));
     }
 
     #[test]

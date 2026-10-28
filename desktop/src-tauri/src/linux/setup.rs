@@ -5,8 +5,10 @@
 //!   binding already used by one of them is refused, never overwritten.
 //! - The Scribiva GNOME Shell extension state, and enabling it (ADR-012). On
 //!   Wayland a newly enabled extension loads only after the next login.
+//! - KDE Plasma: the Scribiva KWin focus script, enabled in kwinrc and loaded
+//!   into the running KWin over D-Bus (no logout).
 //!
-//! All gsettings / gnome-extensions calls go through `Runner`, so the logic is
+//! All gsettings / gnome-extensions / kwriteconfig6 / qdbus calls go through `Runner`, so the logic is
 //! unit-tested with a fake and never touches the real session in tests.
 
 use super::proc;
@@ -557,6 +559,187 @@ pub fn enable_extension(
     })
 }
 
+// ---------------------------------------------------------------- KWin script
+
+/// `kwinrc [Plugins]` key KWin reads for the script (`<Id>Enabled`).
+pub fn kwin_enabled_key() -> String {
+    format!("{}Enabled", super::kwin::SCRIPT_ID)
+}
+
+pub fn kwin_script_dirs() -> Vec<PathBuf> {
+    let mut dirs = vec![PathBuf::from("/usr/share/kwin/scripts")];
+    let data_home = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")));
+    if let Some(d) = data_home {
+        dirs.push(d.join("kwin/scripts"));
+    }
+    dirs
+}
+
+/// A KPackage with our id and its main script, in any of `dirs`.
+pub fn kwin_script_installed_in(dirs: &[PathBuf]) -> bool {
+    dirs.iter().any(|d| {
+        let root = d.join(super::kwin::SCRIPT_ID);
+        root.join("metadata.json").is_file() && root.join("contents/code/main.js").is_file()
+    })
+}
+
+pub fn kwin_script_installed() -> bool {
+    kwin_script_installed_in(&kwin_script_dirs())
+}
+
+/// KConfig boolean as KWin reads it (`QVariant(value).toBool()`).
+fn kconfig_true(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "true" | "1" | "on" | "yes"
+    )
+}
+
+/// `[Plugins] scribiva-focusEnabled=...` from kwinrc text (fallback when
+/// kreadconfig6 is not installed). Missing key = disabled (the script is
+/// not enabled by default).
+pub fn kwinrc_enabled(text: &str) -> bool {
+    let key = kwin_enabled_key();
+    let mut in_plugins = false;
+    let mut enabled = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_plugins = line == "[Plugins]";
+        } else if in_plugins {
+            if let Some((k, v)) = line.split_once('=') {
+                if k.trim() == key {
+                    enabled = kconfig_true(v);
+                }
+            }
+        }
+    }
+    enabled
+}
+
+fn kwinrc_path() -> Option<PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .map(|d| d.join("kwinrc"))
+}
+
+/// Persisted choice in kwinrc.
+pub fn kwin_script_enabled(r: &dyn Runner) -> bool {
+    let key = kwin_enabled_key();
+    if r.available("kreadconfig6") {
+        if let Ok(v) = r.run(
+            "kreadconfig6",
+            &["--file", "kwinrc", "--group", "Plugins", "--key", &key],
+        ) {
+            return kconfig_true(&v);
+        }
+    }
+    kwinrc_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .is_some_and(|t| kwinrc_enabled(&t))
+}
+
+/// Ask the running KWin to load newly enabled scripts, as the KWin Scripts
+/// settings page does (`org.kde.kwin.Scripting.start`). No logout needed.
+fn kwin_load_scripts(r: &dyn Runner) -> Result<(), String> {
+    let kwin = super::kwin::KWIN_BUS_NAME;
+    let path = super::kwin::SCRIPTING_PATH;
+    let method = format!("{}.start", super::kwin::SCRIPTING_INTERFACE);
+    for qdbus in ["qdbus6", "qdbus"] {
+        if r.available(qdbus) {
+            return r.run(qdbus, &[kwin, path, &method]).map(|_| ());
+        }
+    }
+    if r.available("dbus-send") {
+        let dest = format!("--dest={kwin}");
+        return r
+            .run(
+                "dbus-send",
+                &["--session", "--type=method_call", &dest, path, &method],
+            )
+            .map(|_| ());
+    }
+    Err("neither qdbus6 nor dbus-send found".into())
+}
+
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub struct KwinStatus {
+    /// KDE Plasma session.
+    pub kde: bool,
+    pub kwin_script_installed: bool,
+    /// Persisted in kwinrc `[Plugins] scribiva-focusEnabled`.
+    pub kwin_script_enabled: bool,
+    /// An `Activated` call from KWin arrived since this app started.
+    pub kwin_focus_active: bool,
+}
+
+/// Enable the script in kwinrc and load it into the running KWin.
+/// `focus_active` waits briefly for the script's first report.
+pub fn enable_kwin_script(
+    r: &dyn Runner,
+    kde: bool,
+    installed: bool,
+    focus_active: &dyn Fn() -> bool,
+) -> Result<KwinStatus, String> {
+    if !installed {
+        return Err(
+            "The Scribiva KWin script is not installed; reinstall the scribiva package".into(),
+        );
+    }
+    if !r.available("kwriteconfig6") {
+        return Err(format!(
+            "kwriteconfig6 not found; enable \"Scribiva focus\" under System Settings > Window Management > KWin Scripts ({})",
+            kwin_enabled_key()
+        ));
+    }
+    r.run(
+        "kwriteconfig6",
+        &[
+            "--file",
+            "kwinrc",
+            "--group",
+            "Plugins",
+            "--key",
+            &kwin_enabled_key(),
+            "--type",
+            "bool",
+            "true",
+        ],
+    )
+    .map_err(|e| {
+        format!(
+            "Could not enable the KWin script: {}",
+            e.chars().take(200).collect::<String>()
+        )
+    })?;
+    // The choice is saved either way; a failed live load only means the
+    // script starts with the next KWin start.
+    if let Err(e) = kwin_load_scripts(r) {
+        eprintln!("Scribiva: loading the KWin script failed: {e}");
+    }
+    Ok(KwinStatus {
+        kde,
+        kwin_script_installed: installed,
+        kwin_script_enabled: kwin_script_enabled(r),
+        kwin_focus_active: focus_active(),
+    })
+}
+
+pub fn kwin_status(r: &dyn Runner) -> KwinStatus {
+    let kde = super::kwin::is_kde();
+    KwinStatus {
+        kde,
+        kwin_script_installed: kwin_script_installed(),
+        kwin_script_enabled: kde && kwin_script_enabled(r),
+        kwin_focus_active: super::kwin::received(),
+    }
+}
+
 // ---------------------------------------------------------------- live probes
 
 pub fn session_type() -> String {
@@ -596,6 +779,8 @@ pub struct SetupStatus {
     pub gnome: bool,
     pub hotkey: HotkeyStatus,
     pub extension: ExtensionStatus,
+    /// KDE Plasma: the Scribiva KWin focus script.
+    pub kwin: KwinStatus,
     /// Command the shortcut runs (shown for manual setup on other desktops).
     pub command: String,
 }
@@ -607,6 +792,7 @@ pub fn status() -> SetupStatus {
         gnome: is_gnome(),
         hotkey: hotkey_status(&System, &command),
         extension: extension_status(&System),
+        kwin: kwin_status(&System),
         command,
     }
 }
@@ -633,6 +819,21 @@ pub fn run_action(action: &str, binding: Option<&str>) -> Result<serde_json::Val
                 serde_json::to_value(r).map_err(|e| e.to_string())?,
             );
         }
+        "kwin" => {
+            let r = enable_kwin_script(
+                &System,
+                super::kwin::is_kde(),
+                kwin_script_installed(),
+                &|| {
+                    super::kwin::resync();
+                    super::kwin::wait_received(Duration::from_secs(2))
+                },
+            )?;
+            out.insert(
+                "kwin".into(),
+                serde_json::to_value(r).map_err(|e| e.to_string())?,
+            );
+        }
         _ => return Err("Unsupported setup action".into()),
     }
     out.insert(
@@ -654,6 +855,8 @@ mod tests {
         values: RefCell<BTreeMap<(String, String), String>>,
         calls: RefCell<Vec<String>>,
         no_gsettings: bool,
+        /// Programs reported as not installed.
+        missing: Vec<&'static str>,
     }
 
     impl Fake {
@@ -696,12 +899,29 @@ mod tests {
 
     impl Runner for Fake {
         fn available(&self, program: &str) -> bool {
-            !(self.no_gsettings && program == "gsettings")
+            !(self.missing.contains(&program) || self.no_gsettings && program == "gsettings")
         }
         fn run(&self, program: &str, args: &[&str]) -> Result<String, String> {
             self.calls
                 .borrow_mut()
                 .push(format!("{program} {}", args.join(" ")));
+            // kwinrc stored as ("kwinrc:<group>", key).
+            match (program, args) {
+                ("kreadconfig6", ["--file", file, "--group", group, "--key", key]) => {
+                    return Ok(self
+                        .value(&format!("{file}:{group}"), key)
+                        .unwrap_or_default());
+                }
+                (
+                    "kwriteconfig6",
+                    ["--file", file, "--group", group, "--key", key, "--type", "bool", value],
+                ) => {
+                    self.put(&format!("{file}:{group}"), key, value);
+                    return Ok(String::new());
+                }
+                ("kwriteconfig6", _) => return Err("bad kwriteconfig6 call".into()),
+                _ => {}
+            }
             if program != "gsettings" {
                 return Ok(String::new());
             }
@@ -927,5 +1147,97 @@ mod tests {
             (s.active, s.version, s.needs_relogin),
             (true, 2, Some(false))
         );
+    }
+
+    #[test]
+    fn kwinrc_text_parsing() {
+        assert!(kwinrc_enabled(
+            "[Plugins]\nblurEnabled=true\nscribiva-focusEnabled=true\n"
+        ));
+        assert!(!kwinrc_enabled("[Plugins]\nscribiva-focusEnabled=false\n"));
+        assert!(!kwinrc_enabled("[Plugins]\nblurEnabled=true\n"));
+        // Same key in another group does not count.
+        assert!(!kwinrc_enabled(
+            "[Other]\nscribiva-focusEnabled=true\n[Plugins]\n"
+        ));
+        assert!(kwinrc_enabled("[Plugins]\n scribiva-focusEnabled = 1 \n"));
+        assert!(!kwinrc_enabled(""));
+    }
+
+    #[test]
+    fn kwin_script_install_detection() {
+        let tmp = std::env::temp_dir().join(format!("scribiva-kwin-{}", std::process::id()));
+        let root = tmp.join("scribiva-focus");
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(root.join("contents/code")).unwrap();
+        let dirs = vec![PathBuf::from("/nonexistent-scribiva"), tmp.clone()];
+        assert!(!kwin_script_installed_in(&dirs));
+        std::fs::write(root.join("metadata.json"), "{}").unwrap();
+        assert!(!kwin_script_installed_in(&dirs));
+        std::fs::write(root.join("contents/code/main.js"), "").unwrap();
+        assert!(kwin_script_installed_in(&dirs));
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn enable_kwin_script_writes_kwinrc_and_loads_live() {
+        let f = Fake::default();
+        assert!(!kwin_script_enabled(&f));
+        f.calls.borrow_mut().clear();
+        assert!(enable_kwin_script(&f, true, false, &|| false).is_err());
+        assert!(f.calls.borrow().is_empty());
+        let s = enable_kwin_script(&f, true, true, &|| true).unwrap();
+        assert_eq!(
+            s,
+            KwinStatus {
+                kde: true,
+                kwin_script_installed: true,
+                kwin_script_enabled: true,
+                kwin_focus_active: true,
+            }
+        );
+        assert_eq!(
+            f.value("kwinrc:Plugins", "scribiva-focusEnabled")
+                .as_deref(),
+            Some("true")
+        );
+        let calls = f.calls.borrow();
+        assert!(calls.iter().any(|c| c
+            == "kwriteconfig6 --file kwinrc --group Plugins --key scribiva-focusEnabled --type bool true"));
+        assert!(calls
+            .iter()
+            .any(|c| c == "qdbus6 org.kde.KWin /Scripting org.kde.kwin.Scripting.start"));
+        // Never touches GNOME settings on KDE.
+        assert!(calls.iter().all(|c| !c.starts_with("gsettings")));
+    }
+
+    #[test]
+    fn enable_kwin_script_falls_back_to_dbus_send() {
+        let f = Fake {
+            missing: vec!["qdbus6", "qdbus"],
+            ..Default::default()
+        };
+        let s = enable_kwin_script(&f, true, true, &|| false).unwrap();
+        assert!(s.kwin_script_enabled && !s.kwin_focus_active);
+        assert!(f.calls.borrow().iter().any(|c| c
+            == "dbus-send --session --type=method_call --dest=org.kde.KWin /Scripting org.kde.kwin.Scripting.start"));
+        // No loader tool at all: the choice is still saved.
+        let none = Fake {
+            missing: vec!["qdbus6", "qdbus", "dbus-send"],
+            ..Default::default()
+        };
+        assert!(
+            enable_kwin_script(&none, true, true, &|| false)
+                .unwrap()
+                .kwin_script_enabled
+        );
+        // Without kwriteconfig6: a clear manual instruction, nothing written.
+        let no_write = Fake {
+            missing: vec!["kwriteconfig6"],
+            ..Default::default()
+        };
+        let err = enable_kwin_script(&no_write, true, true, &|| false).unwrap_err();
+        assert!(err.contains("KWin Scripts"), "{err}");
+        assert!(no_write.calls.borrow().is_empty());
     }
 }

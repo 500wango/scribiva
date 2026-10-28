@@ -52,6 +52,10 @@ _KNOWN_PHANTOMS = {
     '시청해주셔서감사합니다', 'merci', 'untertitelderamaraorgcommunity',
     'субтитрысделалdimatorzok', 'продолжениеследует',
 }
+# Subtitle-credit fragments from Whisper's training data. They never occur in
+# real dictation, so they mark phantom text even inside a longer transcript.
+_PHANTOM_MARKERS = ('字幕志愿者', '字幕由', 'amaraorg', '中文字幕', '字幕组',
+                    'subtitlesby', 'untertitel', 'субтитры')
 NO_SPEECH_THRESHOLD = 0.6
 LOGPROB_THRESHOLD = -1.0
 
@@ -72,6 +76,8 @@ def is_suspected_hallucination(text: str, segments: list | None = None) -> bool:
     if not norm:
         return True
     if norm in _KNOWN_PHANTOMS:
+        return True
+    if any(marker in norm for marker in _PHANTOM_MARKERS):
         return True
     if segments:
         silent = 0

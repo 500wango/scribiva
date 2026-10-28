@@ -1,12 +1,15 @@
 //! Focused-window identity for the Linux focus guard (ADR-012), port of
 //! `src/scribiva/focus.py`. Sources:
 //! - X11 session (`XDG_SESSION_TYPE=x11`): `_NET_ACTIVE_WINDOW` via xprop.
+//! - KDE Plasma Wayland: the Scribiva KWin script, which pushes activations
+//!   to `linux::kwin` (no InsertText there; delivery re-checks this snapshot
+//!   right before the clipboard + paste chord).
 //! - Otherwise (GNOME Wayland): the Scribiva GNOME Shell extension.
 //!
 //! No source = `None` (unknown): the caller copies instead of pasting.
 //! Window titles are never read.
 
-use super::{proc, shell};
+use super::{kwin, proc, shell};
 use crate::focus_policy::{FocusSnapshot, FocusSource};
 use std::time::Duration;
 
@@ -40,6 +43,26 @@ const TERMINAL_PATTERNS: &[&str] = &[
     "warp",
 ];
 
+/// Linux focus sources. `crate::focus_policy::FocusSource` has no KWin
+/// variant yet (that file is shared with Windows), so the mapping to it lives
+/// here, in one place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    Gnome,
+    KWin,
+    X11,
+}
+
+impl Source {
+    pub fn policy(self) -> FocusSource {
+        match self {
+            Source::Gnome => FocusSource::GnomeExtension,
+            Source::X11 => FocusSource::X11,
+            Source::KWin => FocusSource::KWin,
+        }
+    }
+}
+
 pub fn is_x11() -> bool {
     std::env::var("XDG_SESSION_TYPE").is_ok_and(|s| s.eq_ignore_ascii_case("x11"))
 }
@@ -68,7 +91,7 @@ pub fn same_target(before: &FocusSnapshot, after: Option<&FocusSnapshot>) -> boo
 }
 
 fn snapshot_of(
-    source: FocusSource,
+    source: Source,
     app_id: String,
     wm_class: String,
     window: u64,
@@ -79,7 +102,7 @@ fn snapshot_of(
     }
     let clip = |s: String| s.chars().take(200).collect::<String>();
     Some(FocusSnapshot {
-        source,
+        source: source.policy(),
         window,
         pid,
         own_process: pid != 0 && pid == std::process::id(),
@@ -91,7 +114,20 @@ fn snapshot_of(
 
 pub fn from_gnome(reply: shell::FocusReply) -> Option<FocusSnapshot> {
     let (app_id, wm_class, window, pid) = reply;
-    snapshot_of(FocusSource::GnomeExtension, app_id, wm_class, window, pid)
+    snapshot_of(Source::Gnome, app_id, wm_class, window, pid)
+}
+
+/// KWin activation → snapshot: app id is the desktop file name (as GNOME's
+/// app id), falling back to the resource class; the WM class slot holds the
+/// resource class; the window id is a stable hash of KWin's window UUID.
+pub fn from_kwin(a: kwin::Activation) -> Option<FocusSnapshot> {
+    let window = kwin::window_id(&a.window_uuid);
+    let app_id = if a.desktop_file.is_empty() {
+        a.resource_class.clone()
+    } else {
+        a.desktop_file
+    };
+    snapshot_of(Source::KWin, app_id, a.resource_class, window, a.pid)
 }
 
 /// `_NET_ACTIVE_WINDOW(WINDOW): window id # 0x3a00007` → `0x3a00007`.
@@ -133,13 +169,15 @@ fn x11_snapshot() -> Option<FocusSnapshot> {
         proc::run_ok("xprop", &["-id", &id, "WM_CLASS", "_NET_WM_PID"], t).unwrap_or_default();
     let (class, instance, pid) = parse_window_props(&props);
     let window = u64::from_str_radix(id.trim_start_matches("0x"), 16).ok()?;
-    snapshot_of(FocusSource::X11, class, instance, window, pid)
+    snapshot_of(Source::X11, class, instance, window, pid)
 }
 
 /// Identity of the focused window, or None when it cannot be determined.
 pub fn snapshot() -> Option<FocusSnapshot> {
     if is_x11() {
         x11_snapshot()
+    } else if kwin::is_kde_wayland() {
+        kwin::current().and_then(from_kwin)
     } else {
         shell::get_focus().and_then(from_gnome)
     }
@@ -202,6 +240,69 @@ mod tests {
         assert!(!is_terminal(&s) && !is_own_window(&s));
         let own = from_gnome((String::new(), "x".into(), 5, std::process::id())).unwrap();
         assert!(own.own_process && is_own_window(&own));
+    }
+
+    #[test]
+    fn kwin_activation_mapping() {
+        let uuid = "{3F2504E0-4F89-11D3-9A0C-0305E82C3301}";
+        assert!(from_kwin(kwin::Activation::parse("", "", "", "0")).is_none());
+        assert!(from_kwin(kwin::Activation::parse(
+            "kate",
+            "org.kde.kate",
+            "bogus",
+            "9"
+        ))
+        .is_none());
+        let s = from_kwin(kwin::Activation::parse("kate", "org.kde.kate", uuid, "9")).unwrap();
+        assert_eq!(s.source, Source::KWin.policy());
+        assert_ne!(s.source, FocusSource::GnomeExtension);
+        assert_ne!(s.source, FocusSource::X11);
+        assert_eq!(
+            (s.app_id.as_str(), s.exe.as_str(), s.pid),
+            ("org.kde.kate", "kate", 9)
+        );
+        assert_eq!(
+            s.window,
+            kwin::window_id("3f2504e0-4f89-11d3-9a0c-0305e82c3301")
+        );
+        assert!(!is_terminal(&s) && !is_own_window(&s));
+        // Same window reported again (braces or case differ): same target.
+        let again = from_kwin(kwin::Activation::parse(
+            "kate",
+            "org.kde.kate",
+            "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+            "9",
+        ));
+        assert!(same_target(&s, again.as_ref()));
+        let other = from_kwin(kwin::Activation::parse(
+            "kate",
+            "org.kde.kate",
+            "{3F2504E0-4F89-11D3-9A0C-0305E82C3302}",
+            "9",
+        ));
+        assert!(!same_target(&s, other.as_ref()));
+        // No desktop file: the resource class is the app id.
+        let k = from_kwin(kwin::Activation::parse("konsole", "", uuid, "0")).unwrap();
+        assert_eq!(k.app_id, "konsole");
+        assert!(is_terminal(&k));
+        let y = from_kwin(kwin::Activation::parse(
+            "yakuake",
+            "org.kde.yakuake",
+            uuid,
+            "1",
+        ))
+        .unwrap();
+        assert!(is_terminal(&y));
+        let own = from_kwin(kwin::Activation::parse("scribiva", "scribiva", uuid, "1")).unwrap();
+        assert!(is_own_window(&own));
+        let own_pid = from_kwin(kwin::Activation::parse(
+            "x",
+            "",
+            uuid,
+            &std::process::id().to_string(),
+        ))
+        .unwrap();
+        assert!(own_pid.own_process && is_own_window(&own_pid));
     }
 
     #[test]

@@ -3,10 +3,12 @@
 // platforms, with a slow poll as a safety net.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Backend, detectPlatform, local, type Settings, type Status } from './backend';
 import { type Key, type UiLang } from './i18n';
 import { AccountScreen } from './screens/Account';
 import { DictionaryScreen } from './screens/Dictionary';
+import { Hud } from './screens/Hud';
 import { Onboarding } from './screens/Onboarding';
 import { SettingsScreen } from './screens/Settings';
 import { StatusScreen } from './screens/Status';
@@ -78,7 +80,8 @@ function App({ backend }: { backend: Backend }) {
   // Esc cancels an active recording while the window is focused (docs/06 §9).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && (status?.phase === 'recording' || status?.phase === 'processing')) {
+      const busy = status?.phase === 'recording' || status?.phase === 'processing' || status?.phase === 'injecting';
+      if (e.key === 'Escape' && busy) {
         backend.action('cancel').then(refreshStatus).catch(report);
       }
     };
@@ -139,8 +142,24 @@ function App({ backend }: { backend: Backend }) {
   );
 }
 
+/** Label of the Tauri window this page runs in (`main` or `hud`); no IPC. */
+function windowLabel(): string {
+  try { return getCurrentWindow().label; } catch { return 'main'; }
+}
+
 detectPlatform().then(platform => {
-  createRoot(document.getElementById('root')!).render(
-    <React.StrictMode><App backend={new Backend(platform)} /></React.StrictMode>,
-  );
+  const backend = new Backend(platform);
+  const root = createRoot(document.getElementById('root')!);
+  if (windowLabel() === 'hud') {
+    document.documentElement.classList.add('hud-root');
+    root.render(<React.StrictMode><Hud backend={backend} lang={initialLang()} /></React.StrictMode>);
+    // Follow the configured UI language.
+    backend.settings().then(s => {
+      if (s.ui_language === 'en' || s.ui_language === 'zh') {
+        root.render(<React.StrictMode><Hud backend={backend} lang={s.ui_language} /></React.StrictMode>);
+      }
+    }).catch(() => {});
+    return;
+  }
+  root.render(<React.StrictMode><App backend={backend} /></React.StrictMode>);
 });

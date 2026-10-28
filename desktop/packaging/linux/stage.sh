@@ -24,6 +24,9 @@ IMPL_VERSION="$(sha256sum "$EXT_SRC/impl.js" | cut -c1-12)"
 cp "$EXT_SRC/impl.js" "$STAGE/extension/impl-$IMPL_VERSION.js"
 printf '%s\n' "$IMPL_VERSION" > "$STAGE/extension/impl-version.txt"
 
+# KWin script: focus reports on KDE Plasma Wayland (loaded live, no logout).
+cp -R "$ROOT/extensions/kwin/scribiva-focus" "$STAGE/kwin-script"
+
 # eitype (Apache-2.0) for paste on GNOME/KDE Wayland via libei.
 if [ -z "${EITYPE_BIN:-}" ]; then
   BUILD="$(mktemp -d)"

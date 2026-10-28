@@ -13,6 +13,9 @@ pub enum Phase {
     Idle,
     Recording,
     Processing,
+    /// A user-triggered insert of the last result is running ("insert
+    /// anyway" / "insert again"); never entered automatically.
+    Injecting,
     /// Text was dispatched (`dispatched_unverified`) or is ready to copy.
     Ready,
     FocusChanged,
@@ -29,6 +32,7 @@ impl Phase {
             Phase::Idle => "idle",
             Phase::Recording => "recording",
             Phase::Processing => "processing",
+            Phase::Injecting => "injecting",
             Phase::Ready => "ready",
             Phase::FocusChanged => "focus_changed",
             Phase::ClipboardOnly => "clipboard_only",
@@ -56,6 +60,19 @@ pub enum InsertOutcome {
 }
 
 impl InsertOutcome {
+    /// Outcome enum reported for the north-star metric (docs/11). `notice`
+    /// is the delivery reason; `own_window` is a copy-only case of its own.
+    pub fn telemetry(self, notice: Option<&str>) -> &'static str {
+        match self {
+            InsertOutcome::Inserted => "inserted",
+            InsertOutcome::DispatchedUnverified => "dispatched_unverified",
+            InsertOutcome::FocusChanged => "focus_changed",
+            InsertOutcome::SuspectedNoise => "suspected_noise",
+            InsertOutcome::ClipboardOnly if notice == Some("own_window") => "own_window",
+            InsertOutcome::ClipboardOnly => "clipboard_only",
+        }
+    }
+
     fn phase(self) -> Phase {
         match self {
             InsertOutcome::Inserted | InsertOutcome::DispatchedUnverified => Phase::Ready,
@@ -209,7 +226,37 @@ impl Core {
     /// Whether `job_id` is still the job whose result may be applied.
     pub fn is_current(&self, job_id: &str) -> bool {
         self.active_job.as_deref() == Some(job_id)
-            && matches!(self.phase, Phase::Processing | Phase::Recording)
+            && matches!(
+                self.phase,
+                Phase::Processing | Phase::Recording | Phase::Injecting
+            )
+    }
+
+    /// Recording, uploading or inserting: no new insert may start.
+    pub fn is_busy(&self) -> bool {
+        matches!(
+            self.phase,
+            Phase::Recording | Phase::Processing | Phase::Injecting
+        )
+    }
+
+    /// The user explicitly asked to insert the last result ("insert
+    /// anyway" for suspected noise, "insert again" from recovery). Returns
+    /// the text to deliver under the local operation id `op_id`; the caller
+    /// takes a fresh focus snapshot. Never called automatically.
+    pub fn start_insert(&mut self, op_id: String) -> Option<String> {
+        if self.is_busy() {
+            return None;
+        }
+        let text = self.last.as_ref().map(|l| l.text.clone())?;
+        if text.trim().is_empty() {
+            return None;
+        }
+        self.phase = Phase::Injecting;
+        self.active_job = Some(op_id);
+        self.error = None;
+        self.notice = None;
+        Some(text)
     }
 
     /// Start a new recording with a fresh job id. A job still processing is
@@ -219,7 +266,7 @@ impl Core {
         new_job_id: String,
         now_ms: u64,
     ) -> Result<StartTicket, CoreError> {
-        if self.phase == Phase::Recording {
+        if matches!(self.phase, Phase::Recording | Phase::Injecting) {
             return Err(CoreError::Busy);
         }
         let cancel_remote = if self.phase == Phase::Processing {
@@ -276,6 +323,12 @@ impl Core {
                     None => CancelEffect::Nothing,
                 }
             }
+            Phase::Injecting => {
+                // Local operation only: nothing to cancel on the server.
+                self.phase = Phase::Cancelled;
+                self.active_job = None;
+                CancelEffect::Nothing
+            }
             _ => CancelEffect::Nothing,
         }
     }
@@ -313,9 +366,12 @@ impl Core {
         ResultAction::Deliver { text }
     }
 
-    /// Injection/copy finished for `job_id`. Ignored if cancelled meanwhile.
+    /// Injection/copy finished for `job_id` (a server job, or a manual
+    /// insert's operation id). Ignored if cancelled meanwhile.
     pub fn delivered(&mut self, job_id: &str, outcome: InsertOutcome) -> bool {
-        if self.phase != Phase::Processing || self.active_job.as_deref() != Some(job_id) {
+        if !matches!(self.phase, Phase::Processing | Phase::Injecting)
+            || self.active_job.as_deref() != Some(job_id)
+        {
             return false;
         }
         self.finish(outcome);
@@ -360,7 +416,7 @@ impl Core {
 
     /// Quota / auth problems detected before recording starts.
     pub fn block_start(&mut self, error: ErrorInfo) {
-        if matches!(self.phase, Phase::Recording | Phase::Processing) {
+        if self.is_busy() {
             return;
         }
         self.phase = if error.class == FailureClass::Quota {
@@ -400,7 +456,7 @@ impl Core {
     /// Drop retained audio / pending error and return to idle.
     pub fn discard(&mut self) -> CancelEffect {
         match self.phase {
-            Phase::Recording | Phase::Processing => self.cancel(),
+            Phase::Recording | Phase::Processing | Phase::Injecting => self.cancel(),
             _ => {
                 self.phase = Phase::Idle;
                 self.error = None;
@@ -414,7 +470,7 @@ impl Core {
 
     /// Return to idle after the user acknowledged a terminal state.
     pub fn acknowledge(&mut self) {
-        if !matches!(self.phase, Phase::Recording | Phase::Processing) {
+        if !self.is_busy() {
             self.phase = Phase::Idle;
             self.error = None;
             self.notice = None;
@@ -661,9 +717,72 @@ mod tests {
     }
 
     #[test]
+    fn insert_anyway_is_explicit_and_single() {
+        let mut core = Core::new();
+        // Nothing to insert yet.
+        assert_eq!(core.start_insert("op-0".into()), None);
+        recorded(&mut core, "job-1");
+        core.result_arrived(
+            "job-1",
+            "Thanks for watching".into(),
+            "Thanks for watching".into(),
+            vec![],
+            true,
+        );
+        assert_eq!(core.phase(), Phase::SuspectedNoise);
+        let text = core.start_insert("op-1".into()).unwrap();
+        assert_eq!(text, "Thanks for watching");
+        assert_eq!(core.phase(), Phase::Injecting);
+        assert!(core.is_current("op-1"));
+        // A second insert or a recording cannot start meanwhile.
+        assert_eq!(core.start_insert("op-2".into()), None);
+        assert_eq!(
+            core.start_recording("job-2".into(), 0),
+            Err(CoreError::Busy)
+        );
+        assert!(core.delivered("op-1", InsertOutcome::Inserted));
+        assert_eq!(core.phase(), Phase::Ready);
+        assert!(!core.delivered("op-1", InsertOutcome::Inserted));
+        // Insert again from recovery.
+        assert!(core.start_insert("op-3".into()).is_some());
+        assert_eq!(core.cancel(), CancelEffect::Nothing);
+        assert_eq!(core.phase(), Phase::Cancelled);
+        assert!(!core.delivered("op-3", InsertOutcome::Inserted));
+    }
+
+    #[test]
+    fn insert_refused_while_busy_or_empty() {
+        let mut core = Core::new();
+        recorded(&mut core, "job-1");
+        core.result_arrived("job-1", " ".into(), "".into(), vec![], false);
+        assert_eq!(core.start_insert("op".into()), None);
+        recorded(&mut core, "job-2");
+        assert_eq!(core.phase(), Phase::Processing);
+        assert_eq!(core.start_insert("op".into()), None);
+    }
+
+    #[test]
+    fn telemetry_outcomes_match_server_enum() {
+        use InsertOutcome::*;
+        assert_eq!(Inserted.telemetry(None), "inserted");
+        assert_eq!(
+            DispatchedUnverified.telemetry(None),
+            "dispatched_unverified"
+        );
+        assert_eq!(ClipboardOnly.telemetry(Some("terminal")), "clipboard_only");
+        assert_eq!(ClipboardOnly.telemetry(Some("own_window")), "own_window");
+        assert_eq!(
+            FocusChanged.telemetry(Some("focus_changed")),
+            "focus_changed"
+        );
+        assert_eq!(SuspectedNoise.telemetry(None), "suspected_noise");
+    }
+
+    #[test]
     fn phase_names_match_ux_states() {
         assert_eq!(Phase::FocusChanged.as_str(), "focus_changed");
         assert_eq!(Phase::SuspectedNoise.as_str(), "suspected_noise");
+        assert_eq!(Phase::Injecting.as_str(), "injecting");
         assert_eq!(
             serde_json::to_string(&Phase::ClipboardOnly).unwrap(),
             "\"clipboard_only\""

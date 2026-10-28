@@ -40,9 +40,16 @@ pub struct Settings {
     pub onboarding_done: bool,
     /// Linux: paste even when the focused window cannot be identified.
     pub insert_without_focus_check: bool,
-    /// Linux: XDG autostart entry (`scribiva --hidden`), written only once
-    /// onboarding is done.
+    /// Start in the tray at login (`scribiva --hidden`), applied only once
+    /// onboarding is done. Linux: XDG autostart entry; Windows: HKCU Run value.
     pub start_at_login: bool,
+    /// Small always-on-top, non-focusable recording HUD (docs/06 §3).
+    pub show_hud: bool,
+    /// Check for signed updates at startup and every 24 h (FR-012).
+    pub auto_update_check: bool,
+    /// Report only the insertion outcome enum for each job (north-star
+    /// metric, docs/11); never text or the target app.
+    pub share_insert_outcome: bool,
 }
 
 impl Default for Settings {
@@ -63,6 +70,9 @@ impl Default for Settings {
             onboarding_done: false,
             insert_without_focus_check: false,
             start_at_login: true,
+            show_hud: true,
+            auto_update_check: true,
+            share_insert_outcome: true,
         }
     }
 }
@@ -78,7 +88,7 @@ fn parse_bool(value: &str) -> Result<bool, String> {
 /// Keys that exist on the other platform only: hidden from the UI and
 /// refused by `apply` (Linux sets its shortcut in GNOME, see `linux::setup`).
 #[cfg(windows)]
-pub const OTHER_PLATFORM_KEYS: &[&str] = &["insert_without_focus_check", "start_at_login"];
+pub const OTHER_PLATFORM_KEYS: &[&str] = &["insert_without_focus_check"];
 #[cfg(not(windows))]
 pub const OTHER_PLATFORM_KEYS: &[&str] = &["hotkey"];
 
@@ -146,6 +156,9 @@ impl Settings {
             "onboarding_done" => self.onboarding_done = parse_bool(value)?,
             "insert_without_focus_check" => self.insert_without_focus_check = parse_bool(value)?,
             "start_at_login" => self.start_at_login = parse_bool(value)?,
+            "show_hud" => self.show_hud = parse_bool(value)?,
+            "auto_update_check" => self.auto_update_check = parse_bool(value)?,
+            "share_insert_outcome" => self.share_insert_outcome = parse_bool(value)?,
             "ui_language" if UI_LANGUAGES.contains(&value) => self.ui_language = value.into(),
             "mic_device" => {
                 if value.chars().any(char::is_control) {
@@ -418,6 +431,26 @@ mod tests {
         assert_eq!(s.mode, "standard");
         assert!(s.dictation_commands);
         assert_eq!(LANGUAGES.len(), 21);
+        assert!(s.show_hud && s.auto_update_check && s.share_insert_outcome);
+        assert!(s.start_at_login);
+    }
+
+    #[test]
+    fn new_toggles_apply_and_default_for_old_files() {
+        let mut s = Settings::default();
+        s.apply("show_hud", "false").unwrap();
+        s.apply("auto_update_check", "0").unwrap();
+        s.apply("share_insert_outcome", "false").unwrap();
+        s.apply("start_at_login", "false").unwrap();
+        assert!(!s.show_hud && !s.auto_update_check && !s.share_insert_outcome);
+        assert!(!s.start_at_login);
+        assert!(s.apply("show_hud", "maybe").is_err());
+        // A settings file from an older version gets the defaults.
+        let old: Settings =
+            serde_json::from_str(r#"{"language":"ja","auto_insert":false}"#).unwrap();
+        assert!(old.show_hud && old.auto_update_check && old.share_insert_outcome);
+        assert_eq!(old.language, "ja");
+        assert!(!old.auto_insert);
     }
 
     #[test]

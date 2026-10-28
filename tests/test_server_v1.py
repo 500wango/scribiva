@@ -30,6 +30,8 @@ class PostprocessTests(unittest.TestCase):
         self.assertTrue(postprocess.is_suspected_hallucination(
             '字幕由 Amara.org 社区提供'))
         self.assertFalse(postprocess.is_suspected_hallucination('谢谢观看这个演示的各位同事'))
+        self.assertTrue(postprocess.is_suspected_hallucination('字幕志愿者 李宗盛谢谢大家'))
+        self.assertFalse(postprocess.is_suspected_hallucination('明天下午把字幕文件发给我'))
         silent = [{'no_speech_prob': 0.9, 'avg_logprob': -1.4}]
         self.assertTrue(postprocess.is_suspected_hallucination('some words', silent))
         mixed = silent + [{'no_speech_prob': 0.01, 'avg_logprob': -0.2}]

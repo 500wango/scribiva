@@ -17,11 +17,13 @@ mod audio_dsp;
 mod commands;
 mod core;
 mod focus_policy;
+mod hud;
 #[cfg(target_os = "linux")]
 mod linux;
 mod native;
 mod storage;
 mod tray;
+mod updater;
 #[cfg(windows)]
 mod windows;
 
@@ -49,9 +51,18 @@ fn main() {
             platform::on_second_instance(app, &argv);
         }))
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_notification::init());
+        .plugin(tauri_plugin_notification::init())
+        // FR-012. Checks are started by `updater::start` only when a real
+        // public key is configured; the webview has no updater permission.
+        .plugin(tauri_plugin_updater::Builder::new().build());
     #[cfg(windows)]
-    let builder = builder.plugin(windows::hotkey::plugin());
+    let builder = builder.plugin(windows::hotkey::plugin()).plugin(
+        // HKCU\...\CurrentVersion\Run, synced from `start_at_login`.
+        tauri_plugin_autostart::Builder::new()
+            .app_name("Scribiva")
+            .arg("--hidden")
+            .build(),
+    );
     builder
         .invoke_handler(tauri::generate_handler![
             commands::platform,
@@ -61,6 +72,7 @@ fn main() {
             commands::devices,
             commands::mic_test,
             commands::last,
+            commands::updates_enabled,
             commands::action,
             commands::login,
             commands::cancel_login,

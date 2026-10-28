@@ -1,5 +1,6 @@
-// Linux desktop integration (FR-001, ADR-012): GNOME shortcut and the Scribiva
-// GNOME Shell extension. Both are user-level and need no administrator rights.
+// Linux desktop integration (FR-001, ADR-012): GNOME shortcut, the Scribiva
+// GNOME Shell extension and the KDE KWin focus script. All are user-level and
+// need no administrator rights.
 import { useCallback, useEffect, useState } from 'react';
 import type { LinuxSetup as Setup } from '../backend';
 import { useApp } from '../ui';
@@ -16,7 +17,7 @@ export function LinuxSetup() {
   }, [backend]);
   useEffect(() => { refresh(); }, [refresh]);
 
-  async function run(action: 'hotkey' | 'extension') {
+  async function run(action: 'hotkey' | 'extension' | 'kwin') {
     setBusy(action); setError('');
     try {
       const r = await backend.linuxSetup(action);
@@ -67,6 +68,25 @@ export function LinuxSetup() {
             <button type="button" disabled={busy !== ''} onClick={() => run('extension')}>
               {t('lx_ext_enable')}
             </button>
+          )}
+        </div>
+      )}
+      {setup.kwin?.kde && (
+        <div className="setup-row">
+          <div>
+            <h3>{t('lx_kwin_title')}</h3>
+            <p className="muted">
+              <span className={`state ${setup.kwin.kwin_focus_active ? 'ok' : 'warn'}`}>
+                {setup.kwin.kwin_focus_active ? '✓ ' : '! '}
+                {t(setup.kwin.kwin_focus_active ? 'lx_kwin_ok'
+                  : setup.kwin.kwin_script_enabled ? 'lx_kwin_waiting'
+                    : setup.kwin.kwin_script_installed ? 'lx_kwin_off' : 'lx_kwin_missing')}
+              </span>
+            </p>
+            <p className="muted">{t('lx_kwin_why')}</p>
+          </div>
+          {setup.kwin.kwin_script_installed && !setup.kwin.kwin_focus_active && (
+            <button type="button" disabled={busy !== ''} onClick={() => run('kwin')}>{t('lx_kwin_enable')}</button>
           )}
         </div>
       )}

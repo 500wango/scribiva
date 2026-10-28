@@ -98,7 +98,8 @@
           "x11-utils",
           "xclip",
           "xdotool",
-          "gnome-shell-extension-appindicator | gnome-shell"
+          "gnome-shell-extension-appindicator | gnome-shell",
+          "kde-cli-tools | qdbus-qt6"
         ],
         "files": {
           "/usr/bin/scribiva-cli": "../packaging/linux/scribiva-cli",
@@ -107,7 +108,8 @@
           "/usr/share/doc/scribiva/copyright": "../packaging/linux/stage/doc/copyright",
           "/usr/share/doc/scribiva/LICENSE": "../packaging/linux/stage/doc/LICENSE",
           "/usr/share/doc/scribiva/LICENSE.eitype": "../packaging/linux/stage/doc/LICENSE.eitype",
-          "/usr/share/doc/scribiva/THIRD-PARTY-eitype.txt": "../packaging/linux/stage/doc/THIRD-PARTY-eitype.txt"
+          "/usr/share/doc/scribiva/THIRD-PARTY-eitype.txt": "../packaging/linux/stage/doc/THIRD-PARTY-eitype.txt",
+          "/usr/share/kwin/scripts/scribiva-focus": "../packaging/linux/stage/kwin-script"
         },
         "postInstallScript": "../packaging/linux/postinst",
         "postRemoveScript": "../packaging/linux/postrm"
@@ -118,5 +120,16 @@
     "copyright": "Scribiva contributors, AGPL-3.0-only",
     "license": "AGPL-3.0-only"
   },
-  "mainBinaryName": "scribiva"
+  "mainBinaryName": "scribiva",
+  "plugins": {
+    "updater": {
+      "pubkey": "REPLACE_WITH_MINISIGN_PUBLIC_KEY",
+      "endpoints": [
+        "https://downloads.scribiva.app/updates/{{target}}/{{arch}}/{{current_version}}"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
 }

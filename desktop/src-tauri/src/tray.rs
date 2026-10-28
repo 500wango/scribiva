@@ -85,6 +85,41 @@ fn t(lang: &str, key: &str) -> &'static str {
                 "Copy last result"
             }
         }
+        "insert" => {
+            if zh {
+                "插入最近结果"
+            } else {
+                "Insert last result"
+            }
+        }
+        "discard_last" => {
+            if zh {
+                "丢弃最近结果"
+            } else {
+                "Discard last result"
+            }
+        }
+        "update_ready" => {
+            if zh {
+                "重启以安装更新"
+            } else {
+                "Restart to install update"
+            }
+        }
+        "update_manual" => {
+            if zh {
+                "有新版本：前往官网下载"
+            } else {
+                "New version: download from the website"
+            }
+        }
+        "injecting" => {
+            if zh {
+                "正在输入…"
+            } else {
+                "Inserting…"
+            }
+        }
         "settings" => {
             if zh {
                 "打开设置"
@@ -173,8 +208,25 @@ fn t(lang: &str, key: &str) -> &'static str {
     }
 }
 
-fn build_menu(app: &AppHandle, lang: &str, mode: &str) -> tauri::Result<Menu<Wry>> {
+/// Update entry shown in the tray, if any.
+fn update_item(native: &Native) -> Option<&'static str> {
+    use crate::updater::UpdateState;
+    match native.update_state().map(|u| u.state) {
+        Some(UpdateState::Ready) => Some("update_ready"),
+        Some(UpdateState::Manual) => Some("update_manual"),
+        _ => None,
+    }
+}
+
+fn build_menu(
+    app: &AppHandle,
+    lang: &str,
+    mode: &str,
+    update: Option<&'static str>,
+) -> tauri::Result<Menu<Wry>> {
     let toggle = MenuItem::with_id(app, "toggle", t(lang, "start"), true, None::<&str>)?;
+    // Cancel works for recording, transcribing and inserting (on Linux this
+    // and `scribiva --cancel` replace the global Esc of Windows).
     let cancel = MenuItem::with_id(app, "cancel", t(lang, "cancel"), true, None::<&str>)?;
     let raw = CheckMenuItem::with_id(
         app,
@@ -202,16 +254,37 @@ fn build_menu(app: &AppHandle, lang: &str, mode: &str) -> tauri::Result<Menu<Wry
     )?;
     let modes = Submenu::with_items(app, t(lang, "mode"), true, &[&raw, &std_, &pol])?;
     let copy = MenuItem::with_id(app, "copy", t(lang, "copy"), true, None::<&str>)?;
+    // Explicit user request, into the window that has focus once the menu
+    // closes ("insert anyway" for suspected noise, "insert again").
+    let insert = MenuItem::with_id(app, "insert", t(lang, "insert"), true, None::<&str>)?;
+    let discard = MenuItem::with_id(
+        app,
+        "discard_last",
+        t(lang, "discard_last"),
+        true,
+        None::<&str>,
+    )?;
     let settings = MenuItem::with_id(app, "settings", t(lang, "settings"), true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", t(lang, "quit"), true, None::<&str>)?;
     let sep1 = PredefinedMenuItem::separator(app)?;
     let sep2 = PredefinedMenuItem::separator(app)?;
-    Menu::with_items(
+    let menu = Menu::with_items(
         app,
         &[
-            &toggle, &cancel, &sep1, &modes, &copy, &sep2, &settings, &quit,
+            &toggle, &cancel, &sep1, &modes, &copy, &insert, &discard, &sep2, &settings,
         ],
-    )
+    )?;
+    if let Some(key) = update {
+        menu.append(&MenuItem::with_id(
+            app,
+            key,
+            t(lang, key),
+            true,
+            None::<&str>,
+        )?)?;
+    }
+    menu.append(&quit)?;
+    Ok(menu)
 }
 
 pub fn show_main(app: &AppHandle) {
@@ -224,7 +297,7 @@ pub fn show_main(app: &AppHandle) {
 
 pub fn setup(app: &AppHandle, native: &Arc<Native>) -> tauri::Result<()> {
     let s = native.settings();
-    let menu = build_menu(app, &s.ui_language, &s.mode)?;
+    let menu = build_menu(app, &s.ui_language, &s.mode, update_item(native))?;
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -241,6 +314,17 @@ pub fn setup(app: &AppHandle, native: &Arc<Native>) -> tauri::Result<()> {
                 "cancel" => native.cancel(),
                 "copy" => {
                     let _ = native.copy_last(false);
+                }
+                "insert" => native.insert_last(false),
+                "discard_last" => native.discard_last(),
+                "update_ready" => {
+                    if crate::updater::install(&native).is_err() {
+                        let a = app.clone();
+                        let _ = app.run_on_main_thread(move || show_main(&a));
+                    }
+                }
+                "update_manual" => {
+                    let _ = crate::updater::open_release_page(&app);
                 }
                 "settings" => {
                     let a = app.clone();
@@ -280,7 +364,11 @@ pub fn rebuild_menu(app: &AppHandle, lang: &str) {
         return;
     };
     let mode = native.settings().mode;
-    if let (Some(tray), Ok(menu)) = (app.tray_by_id(TRAY_ID), build_menu(app, lang, &mode)) {
+    let update = update_item(&native);
+    if let (Some(tray), Ok(menu)) = (
+        app.tray_by_id(TRAY_ID),
+        build_menu(app, lang, &mode, update),
+    ) {
         let _ = tray.set_menu(Some(menu));
     }
 }
@@ -288,7 +376,7 @@ pub fn rebuild_menu(app: &AppHandle, lang: &str) {
 fn icon_kind(phase: Phase) -> &'static str {
     match phase {
         Phase::Recording => "recording",
-        Phase::Processing => "processing",
+        Phase::Processing | Phase::Injecting => "processing",
         Phase::FocusChanged | Phase::SuspectedNoise | Phase::Quota | Phase::Error => "attention",
         _ => "idle",
     }

@@ -1,17 +1,22 @@
 // Settings (docs/06 §2): language, writing mode, zh script, dictation
-// commands, microphone, max duration, hotkey, insertion policy with risk text.
+// commands, microphone, max duration, hotkey, insertion policy with risk text,
+// HUD, start at login, notifications, UI language, updates, privacy.
 // Controls render only when the backend reports the key, so options for one
 // platform stay hidden on the other.
 import { useCallback, useEffect, useId, useState } from 'react';
 import { LinuxSetup } from './LinuxSetup';
+import { UpdateBanner } from './Status';
 import type { Devices } from '../backend';
 import { SPEECH_LANGUAGES } from '../i18n';
 import { has, Section, Select, Toggle, useApp } from '../ui';
 
 export function SettingsScreen() {
-  const { backend, t, settings, setSetting, report, status } = useApp();
+  const { backend, t, settings, setSetting, report, status, lang, setLang } = useApp();
   const [devices, setDevices] = useState<Devices | null>(null);
   const [saved, setSaved] = useState(false);
+  const [cleared, setCleared] = useState(false);
+  const [updates, setUpdates] = useState(false);
+  useEffect(() => { backend.updatesEnabled().then(setUpdates); }, [backend]);
 
   const loadDevices = useCallback(async () => {
     try { setDevices(await backend.devices()); } catch (e) { report(e); }
@@ -83,16 +88,65 @@ export function SettingsScreen() {
           <Toggle label={t('restoreClipboard')} checked={bool('restore_text_clipboard')}
             onChange={v => save('restore_text_clipboard', v)} />
         )}
+      </Section>
+
+      <Section title={t('sec_general')}>
+        <Select label={t('uiLanguage')} value={lang} onChange={v => setLang(v === 'zh' ? 'zh' : 'en')}
+          options={[['en', 'English'], ['zh', '简体中文']]} />
+        {has(s, 'start_at_login') && (
+          <Toggle label={backend.isWindows ? t('startAtLoginWin') : t('startAtLogin')}
+            checked={bool('start_at_login')} onChange={v => save('start_at_login', v)} />
+        )}
         {has(s, 'notifications') && (
           <Toggle label={t('notifications')} checked={bool('notifications')} onChange={v => save('notifications', v)} />
         )}
-        {has(s, 'start_at_login') && (
-          <Toggle label={t('startAtLogin')} checked={bool('start_at_login')} onChange={v => save('start_at_login', v)} />
+        {has(s, 'show_hud') && (
+          <>
+            <Toggle label={t('showHud')} checked={bool('show_hud') && !!status?.hudSupported}
+              disabled={!status?.hudSupported} onChange={v => save('show_hud', v)} />
+            <p className="help">{status?.hudSupported ? t('showHudHelp') : t('hudUnsupported')}</p>
+          </>
         )}
       </Section>
 
+      <Section title={t('sec_updates')}>
+        {updates ? (
+          <>
+            {has(s, 'auto_update_check') && (
+              <Toggle label={t('autoUpdateCheck')} checked={bool('auto_update_check')}
+                onChange={v => save('auto_update_check', v)} />
+            )}
+            <p className="help">{t('updateBusy')}</p>
+            <UpdateStatus />
+            <div className="actions">
+              <button type="button" className="soft" onClick={() => backend.action('check-update').catch(report)}>
+                {t('updateCheckNow')}
+              </button>
+            </div>
+          </>
+        ) : <p className="muted">{t('updatesDisabled')}</p>}
+      </Section>
+
       <Section title={t('sec_privacy')}>
+        <dl className="facts">
+          <dt>{t('privacyRegion')}</dt><dd>{t('privacyRegionValue')}</dd>
+          <dt>{t('privacyProviders')}</dt><dd>{t('privacyProvidersValue')}</dd>
+        </dl>
         <p className="muted">{t('privacyNote')}</p>
+        {has(s, 'share_insert_outcome') && (
+          <>
+            <Toggle label={t('shareOutcome')} checked={bool('share_insert_outcome')}
+              onChange={v => save('share_insert_outcome', v)} />
+            <p className="help">{t('shareOutcomeHelp')}</p>
+          </>
+        )}
+        <div className="actions">
+          <button type="button" className="soft" onClick={async () => {
+            setCleared(false);
+            try { await backend.action('clear-last'); setCleared(true); } catch (e) { report(e); }
+          }}>{t('clearLocal')}</button>
+        </div>
+        {cleared && <p className="success" role="status">{t('clearLocalDone')}</p>}
         {has(s, 'delete_audio_on_success') && (
           <Toggle label="Delete local recording after success" checked={bool('delete_audio_on_success')}
             onChange={v => save('delete_audio_on_success', v)} />
@@ -101,6 +155,14 @@ export function SettingsScreen() {
       {saved && <p className="success toast" role="status">{t('saved')}</p>}
     </main>
   );
+}
+
+function UpdateStatus() {
+  const { t, status } = useApp();
+  const u = status?.update;
+  if (!u) return <p className="muted small">{t('updateNone')}</p>;
+  if (u.state === 'downloading') return <p className="muted small" role="status">{t('updateChecking', { version: u.version })}</p>;
+  return <UpdateBanner />;
 }
 
 function NumberField({ label, value, min, max, onCommit }: {

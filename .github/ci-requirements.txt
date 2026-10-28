@@ -1,0 +1,7 @@
+# Lint tools for .github/workflows/ci.yml, installed with
+#   pip install --require-hashes --only-binary :all: -r .github/ci-requirements.txt
+# Hashes from https://pypi.org/pypi/ruff/0.15.21/json (manylinux x86_64 wheel, Windows x64 wheel, sdist).
+ruff==0.15.21 \
+    --hash=sha256:bab0905d2f29e0d9fbc3c373ed23db0095edaa3f71f1f4f519ec15134d9e85c8 \
+    --hash=sha256:d4b8d9a2f0f12b816b50447f6eccb9f4bb01a6b82c86b50fb3b5354b458dc6d3 \
+    --hash=sha256:d0cfc841c572283c36548f82664a54ce6565567f1b0d5b4cf2caac693d8b7500

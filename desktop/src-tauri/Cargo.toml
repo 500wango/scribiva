@@ -28,9 +28,21 @@ rustls = { version = "=0.23.46", default-features = false, features = ["ring", "
 tokio = { version = "=1.54.1", features = ["time", "sync"] }
 # Windows Credential Manager / Linux Secret Service (zbus, pure-Rust crypto).
 keyring = "=4.2.0"
+# Pure-Rust FLAC encoder for smaller uploads (PRD §11.2); no C code. Default
+# features (threads, serde, log) are not needed for one mono stream.
+flacenc = { version = "=0.5.1", default-features = false }
+# FR-012: signed updates (minisign signature verified by the plugin). Same
+# rustls/ring setup as reqwest above; `zip` is only for v1-compatible artifacts.
+tauri-plugin-updater = { version = "=2.14.0", default-features = false, features = ["rustls-tls"] }
+
+[dev-dependencies]
+# FLAC round-trip test only.
+claxon = "=0.4.3"
 
 [target.'cfg(windows)'.dependencies]
 tauri-plugin-global-shortcut = "=2.4.1"
+# HKCU\Software\Microsoft\Windows\CurrentVersion\Run entry (`--hidden`).
+tauri-plugin-autostart = "=2.7.0"
 cpal = "=0.18.2"
 windows-sys = { version = "=0.61.2", features = [
     "Win32_Foundation",

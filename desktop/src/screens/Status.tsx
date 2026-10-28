@@ -50,6 +50,8 @@ export function StatusScreen({ onOpen }: { onOpen: (screen: 'account' | 'setting
       : phase === 'ready' ? t(inserted ? 'hint_inserted' : 'hint_ready') : '';
   const text = showRaw ? last?.raw : last?.text;
   const quotaReset = status?.error?.class === 'quota' || phase === 'quota';
+  const noise = phase === 'suspected_noise';
+  const canInsert = !!status?.canInsert;
 
   return (
     <main className="grid">
@@ -63,6 +65,7 @@ export function StatusScreen({ onOpen }: { onOpen: (screen: 'account' | 'setting
             </div>
             {hint && <p className="muted">{hint}</p>}
             {notice && <p className="notice-text">{t(notice)}</p>}
+            {noise && <p className="notice-text">{t('noise_explain')}</p>}
             {status?.error && <p className="error-text">{status.error.code}: {status.error.message}</p>}
             {status?.hotkeyError && <p className="error-text">{status.hotkeyError}</p>}
           </div>
@@ -77,6 +80,15 @@ export function StatusScreen({ onOpen }: { onOpen: (screen: 'account' | 'setting
           {!busy && phase !== 'idle' &&
             <button type="button" className="soft" onClick={() => act('acknowledge')}>{t('dismiss')}</button>}
         </div>
+        {noise && (
+          <div className="callout" role="group" aria-label={t('phase_suspected_noise')}>
+            <button type="button" onClick={() => act('insert-last')} disabled={!canInsert}
+              aria-describedby="insert-hint">{t('insertAnyway')}</button>
+            <button type="button" className="soft" onClick={() => act('discard-last')}>{t('discardResult')}</button>
+            <p id="insert-hint" className="muted small">{t('insertHint')}</p>
+          </div>
+        )}
+        <UpdateBanner />
         {quotaReset && (
           <div className="callout">
             <button type="button" onClick={() => onOpen('account')}>{t('nav_account')}</button>
@@ -94,6 +106,8 @@ export function StatusScreen({ onOpen }: { onOpen: (screen: 'account' | 'setting
         <div className="actions">
           <button type="button" className="soft" disabled={!last?.text} onClick={() => act('copy-last')}>{t('copy')}</button>
           <button type="button" className="soft" disabled={!last?.raw} onClick={() => act('copy-raw')}>{t('copyRaw')}</button>
+          <button type="button" className="soft" disabled={!canInsert} onClick={() => act('insert-last')}
+            aria-describedby="insert-again-hint">{noise ? t('insertAnyway') : t('insertAgain')}</button>
           <button type="button" className="soft" disabled={!last?.available} aria-pressed={showRaw}
             onClick={() => setShowRaw(!showRaw)}>{showRaw ? t('showFinal') : t('showRaw')}</button>
           <button type="button" className="soft" disabled={!last?.available} onClick={() => act('clear-last')}>{t('clear')}</button>
@@ -103,6 +117,7 @@ export function StatusScreen({ onOpen }: { onOpen: (screen: 'account' | 'setting
           {last?.available ? (text || '—') : t('noResult')}
         </pre>
         {copied && <p className="success" role="status">{copied}</p>}
+        <p id="insert-again-hint" className="muted small">{t('insertHint')}</p>
         {!!last?.warnings.length && (
           <p className="muted">{t('warnings')}: {last.warnings.join(' · ')}</p>
         )}
@@ -110,7 +125,7 @@ export function StatusScreen({ onOpen }: { onOpen: (screen: 'account' | 'setting
         <p className="muted small">{t('memoryOnly')}</p>
       </Section>
 
-      {backend.isLinux && <Diagnostics />}
+      <Diagnostics />
       {status?.login && (
         <Section title={t('signIn')}>
           <p>{t('loginCode')}: <b className="code">{status.login.user_code}</b></p>
@@ -118,6 +133,31 @@ export function StatusScreen({ onOpen }: { onOpen: (screen: 'account' | 'setting
         </Section>
       )}
     </main>
+  );
+}
+
+/** FR-012: signed update ready / available (never installed while busy). */
+export function UpdateBanner() {
+  const { backend, t, status, report } = useApp();
+  const u = status?.update;
+  if (!u || u.state === 'downloading') return null;
+  const busy = status?.phase === 'recording' || status?.phase === 'processing' || status?.phase === 'injecting';
+  async function run(name: 'install-update' | 'open-release-page') {
+    try { await backend.action(name); } catch (e) { report(e); }
+  }
+  return (
+    <div className="callout" role="status">
+      {u.state === 'ready' && (<>
+        <p>{t('updateReady', { version: u.version })}</p>
+        <button type="button" onClick={() => run('install-update')} disabled={busy}>{t('updateRestart')}</button>
+        {busy && <p className="muted small">{t('updateBusy')}</p>}
+      </>)}
+      {u.state === 'manual' && (<>
+        <p>{t('updateManual', { version: u.version })}</p>
+        <button type="button" className="soft" onClick={() => run('open-release-page')}>{t('updateDownload')}</button>
+      </>)}
+      {u.state === 'failed' && <p className="error-text">{t('updateFailed', { version: u.version, error: u.error || '' })}</p>}
+    </div>
   );
 }
 

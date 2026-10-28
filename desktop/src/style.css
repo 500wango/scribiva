@@ -96,3 +96,12 @@ meter { width: 200px; height: 14px; }
 .setup-row h3 { margin: 0 0 4px; font-size: 1rem; }
 .setup-row p { margin: 2px 0; }
 .warning-text { color: var(--warn); font-weight: 600; }
+/* Recording HUD window (non-focusable, click-through) */
+.hud-root, .hud-root body { background: var(--panel); overflow: hidden; user-select: none; }
+.hud { height: 100vh; display: flex; align-items: center; gap: 10px; padding: 0 16px; border: 1px solid var(--line); border-radius: 12px; font-size: 14px; white-space: nowrap; }
+.hud .glyph { font-size: 18px; width: 20px; }
+.hud.recording { border-color: var(--bad); }
+.hud.recording .glyph { color: var(--bad); }
+.hud.processing .glyph, .hud.injecting .glyph { color: var(--warn); }
+.hud-time { font-variant-numeric: tabular-nums; font-weight: 700; }
+.hud-hint { margin-left: auto; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; }

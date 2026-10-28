@@ -19,6 +19,8 @@ pub enum FocusSource {
     GnomeExtension,
     /// `_NET_ACTIVE_WINDOW` via xprop.
     X11,
+    /// Scribiva KWin script (`app.scribiva.Focus1.Activated`).
+    KWin,
 }
 
 /// What the focus adapter could observe about the foreground window.

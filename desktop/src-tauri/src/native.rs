@@ -5,7 +5,7 @@
 //! marshal to the main thread and wait.
 
 use crate::api::{self, ApiClient, CallError, DictationRequest, DictationResponse, Me};
-use crate::audio_dsp::{self, TARGET_RATE};
+use crate::audio_dsp::{self, Prepared, MIN_RECORDING_MS, TARGET_RATE};
 use crate::core::{
     CancelEffect, Core, ErrorInfo, FailureClass, LastResult, Phase, ResultAction, RetryDecision,
     StopDecision,
@@ -36,6 +36,40 @@ fn split_code(e: &str) -> (String, String) {
         _ => ("ERROR".to_string(), e.to_string()),
     }
 }
+
+/// Broken microphone signal (clipping / DC offset): nothing was uploaded.
+pub fn mic_abnormal_error(lang: &str) -> ErrorInfo {
+    ErrorInfo {
+        code: "MIC_SIGNAL_ABNORMAL".into(),
+        message: if lang == "zh" {
+            "麦克风信号异常：大部分录音被削波或偏移，请检查麦克风、插孔或降低输入增益".into()
+        } else {
+            "Microphone signal is abnormal: most of the recording is clipped or offset. Check the microphone, the jack, or lower the input gain.".into()
+        },
+        class: FailureClass::Local,
+        retryable: false,
+    }
+}
+
+/// No speech detected locally (only noise, or a broken microphone that
+/// recovered without picking up the voice): nothing was uploaded.
+pub fn no_speech_error(lang: &str) -> ErrorInfo {
+    ErrorInfo {
+        code: "NO_SPEECH_DETECTED".into(),
+        message: if lang == "zh" {
+            "没有录到清晰的语音：录音里只有噪声。请靠近麦克风再说一次，或检查麦克风和输入音量"
+                .into()
+        } else {
+            "No clear speech was recorded, only noise. Speak closer to the microphone, or check the microphone and input level.".into()
+        },
+        class: FailureClass::Local,
+        retryable: false,
+    }
+}
+
+/// Time for the OS to hand focus back to the previous window after our
+/// window hid or the tray menu closed, before the fresh focus snapshot.
+const FOCUS_SETTLE: Duration = Duration::from_millis(350);
 
 pub fn local_error(e: &str) -> ErrorInfo {
     let (code, message) = split_code(e);
@@ -96,6 +130,8 @@ struct Inner {
     /// Shortcut shown in the UI when it is not `settings.hotkey` (Linux:
     /// the GNOME custom shortcut, empty when none is set up).
     pub hotkey_label: Option<String>,
+    /// Signed update found by `crate::updater` (FR-012).
+    pub update: Option<crate::updater::UpdateView>,
     published: Option<Phase>,
 }
 
@@ -119,6 +155,12 @@ pub struct StatusView {
     pub hotkey: String,
     pub hotkey_error: Option<String>,
     pub login: Option<LoginView>,
+    /// The last result can be inserted on request ("insert anyway" /
+    /// "insert again"); never done automatically.
+    pub can_insert: bool,
+    /// This platform/session can show the no-focus recording HUD.
+    pub hud_supported: bool,
+    pub update: Option<crate::updater::UpdateView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -147,6 +189,7 @@ impl Native {
                 login_gen: 0,
                 hotkey_error: None,
                 hotkey_label: None,
+                update: None,
                 published: None,
             }),
         })
@@ -203,6 +246,10 @@ impl Native {
                 .unwrap_or_else(|| g.settings.hotkey.clone()),
             hotkey_error: g.hotkey_error.clone(),
             login: g.login.clone(),
+            can_insert: !g.core.is_busy()
+                && g.core.last().is_some_and(|l| !l.text.trim().is_empty()),
+            hud_supported: crate::hud::supported(),
+            update: g.update.clone(),
         }
     }
 
@@ -217,17 +264,19 @@ impl Native {
     /// Push state to the webview, tray and (for attention states) a toast.
     pub fn publish(&self) {
         let view = self.view();
-        let (lang, notify, prev) = {
+        let (lang, notify, show_hud, prev) = {
             let mut g = self.lock();
             let prev = g.published.replace(view.phase);
             (
                 g.settings.ui_language.clone(),
                 g.settings.notifications,
+                g.settings.show_hud,
                 prev,
             )
         };
         let _ = self.app.emit("status", &view);
         tray::update(&self.app, &view, &lang);
+        crate::hud::update(&self.app, view.phase, show_hud);
         if prev != Some(view.phase) {
             hotkey::on_phase(&self.app, prev, view.phase);
             platform::indicator(view.phase);
@@ -344,15 +393,41 @@ impl Native {
             (job, g.recorder.take())
         };
         let samples = recorder.map(audio::Recorder::finish).unwrap_or_default();
-        let duration = audio_dsp::duration_ms(samples.len(), TARGET_RATE);
+        let raw_ms = audio_dsp::duration_ms(samples.len(), TARGET_RATE);
+        // Local checks before anything leaves the machine: refuse a broken
+        // microphone signal, cut a start transient, trim silence (FR-017).
+        let prepared = (raw_ms >= MIN_RECORDING_MS)
+            .then(|| audio_dsp::prepare_for_upload(samples, TARGET_RATE));
         let mut g = self.lock();
+        let (duration, samples) = match prepared {
+            None => (raw_ms, Vec::new()),
+            Some(Prepared::Abnormal) => {
+                if let StopDecision::Upload { job_id } = g.core.stop_recording(&job, raw_ms) {
+                    let err = mic_abnormal_error(&g.settings.ui_language);
+                    g.core.failed(&job_id, err);
+                }
+                drop(g);
+                self.publish();
+                return;
+            }
+            Some(Prepared::NoSpeech) => {
+                if let StopDecision::Upload { job_id } = g.core.stop_recording(&job, raw_ms) {
+                    let err = no_speech_error(&g.settings.ui_language);
+                    g.core.failed(&job_id, err);
+                }
+                drop(g);
+                self.publish();
+                return;
+            }
+            Some(Prepared::Ready { samples, spoken_ms }) => (spoken_ms, samples),
+        };
         match g.core.stop_recording(&job, duration) {
             StopDecision::Upload { job_id } => match audio_dsp::encode_wav(&samples, TARGET_RATE) {
                 Ok(wav) => {
                     g.retained = Some(Retained {
                         job_id: job_id.clone(),
                         wav,
-                        duration_ms: duration,
+                        duration_ms: audio_dsp::duration_ms(samples.len(), TARGET_RATE),
                         focus: focus_at_stop,
                     });
                     drop(g);
@@ -442,6 +517,61 @@ impl Native {
         self.lock().core.clear_last();
         self.publish();
     }
+
+    /// "Discard" for a kept result (suspected noise): forget it and return
+    /// to idle.
+    pub fn discard_last(&self) {
+        {
+            let mut g = self.lock();
+            if g.core.is_busy() {
+                return;
+            }
+            g.core.clear_last();
+            g.core.acknowledge();
+        }
+        self.publish();
+    }
+
+    /// User-triggered insert of the last result ("insert anyway" for
+    /// suspected noise, "insert again" from recovery). Uses the normal
+    /// delivery path with a fresh focus snapshot of the window focused at
+    /// that moment. `hide_window`: the request came from our window, which
+    /// is hidden first so focus returns to the window the user came from.
+    /// Never called automatically.
+    pub fn insert_last(self: &Arc<Self>, hide_window: bool) {
+        let op = format!("insert-{}", uuid::Uuid::new_v4());
+        let (text, mut settings) = {
+            let mut g = self.lock();
+            let Some(text) = g.core.start_insert(op.clone()) else {
+                return;
+            };
+            (text, g.settings.clone())
+        };
+        self.publish();
+        if hide_window {
+            if let Some(w) = self.app.get_webview_window("main") {
+                let _ = w.hide();
+            }
+        }
+        // An explicit request: insert even when automatic insertion is off.
+        // Every other guard (focus source, terminals, elevation) still applies.
+        settings.auto_insert = true;
+        let this = self.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(FOCUS_SETTLE);
+            let target = focus::snapshot();
+            let is_current = || this.lock().core.is_current(&op);
+            let (outcome, notice) =
+                platform::deliver::deliver(&text, target.as_ref(), &settings, &is_current);
+            {
+                let mut g = this.lock();
+                if g.core.delivered(&op, outcome) {
+                    g.core.set_notice(notice);
+                }
+            }
+            this.publish();
+        });
+    }
 }
 
 // ---------------------------------------------------------------- upload / deliver
@@ -479,21 +609,43 @@ impl Native {
     }
 
     async fn upload(self: Arc<Self>, job_id: String) {
-        let request = {
+        let (wav, mut request) = {
             let g = self.lock();
             let Some(r) = g.retained.as_ref().filter(|r| r.job_id == job_id) else {
                 return;
             };
-            DictationRequest {
+            let request = DictationRequest {
                 job_id: job_id.clone(),
-                wav: r.wav.clone(),
+                audio: audio_dsp::UploadAudio {
+                    bytes: Vec::new(),
+                    mime: "audio/wav",
+                    file_name: "audio.wav",
+                },
                 duration_ms: r.duration_ms,
                 language: g.settings.language.clone(),
                 grammar_mode: g.settings.mode.clone(),
                 output_script: g.settings.output_script.clone(),
                 dictation_commands: g.settings.dictation_commands,
-            }
+            };
+            (r.wav.clone(), request)
         };
+        // FLAC preferred (§8.3), WAV fallback; re-encoded per attempt from
+        // the retained WAV, off the async runtime.
+        request.audio = tauri::async_runtime::spawn_blocking(move || audio_dsp::upload_audio(&wav))
+            .await
+            .unwrap_or_else(|_| audio_dsp::UploadAudio {
+                bytes: Vec::new(),
+                mime: "audio/wav",
+                file_name: "audio.wav",
+            });
+        if request.audio.bytes.is_empty() {
+            self.lock().core.failed(
+                &job_id,
+                local_error("ENCODE_FAILED: audio could not be encoded"),
+            );
+            self.publish();
+            return;
+        }
         let (client, token) = match self.client_and_token() {
             Ok(v) => v,
             Err(e) => {
@@ -530,6 +682,7 @@ impl Native {
         let text = resp.final_text();
         let raw = resp.raw_text.clone().unwrap_or_default();
         let noise = resp.is_suspected_noise();
+        let server_job = resp.job_id.clone();
         let (action, focus_at_stop, settings) = {
             let mut g = self.lock();
             let action = g
@@ -554,6 +707,8 @@ impl Native {
             ResultAction::Ignore => return,
             ResultAction::KeepOnly => {
                 self.publish();
+                self.report_outcome(server_job, "suspected_noise");
+                self.spawn_refresh_account();
                 return;
             }
             ResultAction::Deliver { text } => {
@@ -568,17 +723,41 @@ impl Native {
                         &settings,
                         &is_current,
                     );
-                    {
+                    let applied = {
                         let mut g = this.lock();
-                        if g.core.delivered(&job, outcome) {
-                            g.core.set_notice(notice);
+                        let applied = g.core.delivered(&job, outcome);
+                        if applied {
+                            g.core.set_notice(notice.clone());
                         }
-                    }
+                        applied
+                    };
                     this.publish();
+                    if applied {
+                        this.report_outcome(server_job, outcome.telemetry(notice.as_deref()));
+                    }
                 });
             }
         }
         self.spawn_refresh_account();
+    }
+}
+
+impl Native {
+    /// Fire-and-forget insertion-outcome report for the north-star metric
+    /// (docs/11): only the enum for the server job id; no text, no app.
+    fn report_outcome(&self, server_job: Option<String>, outcome: &'static str) {
+        let Some(job) = server_job else {
+            return;
+        };
+        if !self.lock().settings.share_insert_outcome {
+            return;
+        }
+        let Ok((client, token)) = self.client_and_token() else {
+            return;
+        };
+        tauri::async_runtime::spawn(async move {
+            client.report_outcome(&token, &job, outcome).await;
+        });
     }
 }
 
@@ -839,7 +1018,10 @@ impl Native {
         if key == "ui_language" {
             tray::rebuild_menu(&self.app, &settings.ui_language);
         }
-        platform::setting_changed(&self.config_dir(), key, &settings);
+        platform::setting_changed(&self.app, &self.config_dir(), key, &settings);
+        if key == "auto_update_check" && settings.auto_update_check {
+            crate::updater::check_soon(self);
+        }
         self.publish();
         Ok(settings)
     }
@@ -856,6 +1038,25 @@ impl Native {
 
     pub fn is_recording(&self) -> bool {
         self.lock().core.phase() == Phase::Recording
+    }
+
+    /// Recording, uploading or inserting (no update install meanwhile).
+    pub fn is_busy(&self) -> bool {
+        self.lock().core.is_busy()
+    }
+
+    pub fn update_state(&self) -> Option<crate::updater::UpdateView> {
+        self.lock().update.clone()
+    }
+
+    pub fn set_update(&self, update: Option<crate::updater::UpdateView>) {
+        let lang = {
+            let mut g = self.lock();
+            g.update = update;
+            g.settings.ui_language.clone()
+        };
+        tray::rebuild_menu(&self.app, &lang);
+        self.publish();
     }
 
     /// Short local microphone test; never uploaded or stored.
@@ -960,6 +1161,16 @@ mod tests {
         // argv[0] is never interpreted, unknown flags are ignored.
         assert_eq!(launch_action(&["--toggle"]), LaunchAction::Show);
         assert_eq!(launch_action(&["scribiva", "--evil"]), LaunchAction::Show);
+    }
+
+    #[test]
+    fn abnormal_mic_error_is_local_and_final() {
+        let zh = mic_abnormal_error("zh");
+        assert_eq!(zh.code, "MIC_SIGNAL_ABNORMAL");
+        assert_eq!(zh.class, FailureClass::Local);
+        assert!(!zh.retryable);
+        assert!(zh.message.starts_with("麦克风信号异常"));
+        assert!(mic_abnormal_error("en").message.contains("clipped"));
     }
 
     #[test]

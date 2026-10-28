@@ -9,6 +9,7 @@ pub mod clipboard;
 pub mod deliver;
 pub mod diagnostics;
 pub mod focus;
+pub mod kwin;
 pub mod migrate;
 pub mod proc;
 pub mod setup;
@@ -28,15 +29,16 @@ pub mod hotkey {
     use crate::core::Phase;
     use tauri::AppHandle;
 
-    /// Global Esc-to-cancel is not possible on GNOME; cancel via the tray,
-    /// the window or `scribiva --cancel`.
+    /// Global Esc-to-cancel is not possible on GNOME; cancel via the tray
+    /// ("Cancel" is enabled while busy), the window, or `scribiva --cancel`
+    /// (which can be bound to a second GNOME shortcut).
     pub fn on_phase(_app: &AppHandle, _prev: Option<Phase>, _now: Phase) {}
 }
 
 fn indicator_phase(phase: Phase) -> &'static str {
     match phase {
         Phase::Recording => "recording",
-        Phase::Processing => "processing",
+        Phase::Processing | Phase::Injecting => "processing",
         Phase::Error | Phase::Quota => "error",
         _ => "idle",
     }
@@ -73,7 +75,12 @@ pub fn indicator(phase: Phase) {
     }
 }
 
-pub fn setting_changed(_config_dir: &Path, key: &str, settings: &Settings) {
+pub fn setting_changed(
+    _app: &tauri::AppHandle,
+    _config_dir: &Path,
+    key: &str,
+    settings: &Settings,
+) {
     if key == "start_at_login" || key == "onboarding_done" {
         autostart::sync(settings);
     }
@@ -104,6 +111,9 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(native.clone());
     crate::tray::setup(app.handle(), &native)?;
     autostart::sync(&native.settings());
+    // X11 only; disabled on Wayland (see `crate::hud`).
+    crate::hud::create(app.handle());
+    crate::updater::start(&native);
 
     let action = native::launch_action(&std::env::args().collect::<Vec<_>>());
     if let Some(window) = app.get_webview_window("main") {
@@ -146,6 +156,8 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         // the running GNOME Shell: no logout, other apps keep running.
         shell::sync_extension();
     });
+    // KDE Plasma Wayland: receive focus reports from the Scribiva KWin script.
+    std::thread::spawn(kwin::start);
     Ok(())
 }
 

@@ -1,7 +1,7 @@
 //! Environment checks for the UI (replaces `scribiva doctor`). Reports tool
 //! presence and states only: no window titles, no transcript text, no token.
 
-use super::{audio, autostart, clipboard, focus, proc, setup, shell};
+use super::{audio, autostart, clipboard, focus, kwin, proc, setup, shell};
 use crate::storage;
 use serde::Serialize;
 use std::path::Path;
@@ -41,6 +41,7 @@ pub struct Diagnostics {
 
 pub fn collect(config_dir: &Path, mic_device: &str, service_url: &str) -> Diagnostics {
     let x11 = focus::is_x11();
+    let kde = kwin::is_kde();
     let mut checks = vec![
         tool("pw-record", "pw-record", "fail", "install pipewire-bin"),
         tool("pw-dump", "pw-dump", "fail", "install pipewire-bin"),
@@ -85,6 +86,11 @@ pub fn collect(config_dir: &Path, mic_device: &str, service_url: &str) -> Diagno
         ));
         checks.push(match clipboard::eitype_path() {
             Some(p) => check("eitype", "ok", p.to_string_lossy()),
+            None if kde => check(
+                "eitype",
+                "warn",
+                "eitype not found; on KDE text is only copied without it",
+            ),
             None => check(
                 "eitype",
                 "warn",
@@ -92,30 +98,11 @@ pub fn collect(config_dir: &Path, mic_device: &str, service_url: &str) -> Diagno
             ),
         });
     }
-    let ext = setup::extension_status(&setup::System);
-    let ext_state = if ext.active {
-        "ok"
-    } else if x11 {
-        "warn"
+    if kde {
+        checks.extend(kwin_checks(&setup::kwin_status(&setup::System), x11));
     } else {
-        "fail"
-    };
-    checks.push(check(
-        "gnome-extension",
-        ext_state,
-        format!(
-            "installed: {}, enabled: {}, active: {}, version: {}{}",
-            ext.installed,
-            ext.enabled,
-            ext.active,
-            ext.version,
-            if ext.enabled && !ext.active {
-                " (log out and back in)"
-            } else {
-                ""
-            }
-        ),
-    ));
+        checks.push(gnome_extension_check(x11));
+    }
     let hotkey = setup::hotkey_status(&setup::System, &setup::toggle_command());
     checks.push(if hotkey.installed {
         check("shortcut", "ok", hotkey.label.unwrap_or_default())
@@ -162,5 +149,103 @@ pub fn collect(config_dir: &Path, mic_device: &str, service_url: &str) -> Diagno
         service_url: service_url.to_string(),
         token_storage: backend,
         checks,
+    }
+}
+
+fn gnome_extension_check(x11: bool) -> Check {
+    let ext = setup::extension_status(&setup::System);
+    let state = if ext.active {
+        "ok"
+    } else if x11 {
+        "warn"
+    } else {
+        "fail"
+    };
+    check(
+        "gnome-extension",
+        state,
+        format!(
+            "installed: {}, enabled: {}, active: {}, version: {}{}",
+            ext.installed,
+            ext.enabled,
+            ext.active,
+            ext.version,
+            if ext.enabled && !ext.active {
+                " (log out and back in)"
+            } else {
+                ""
+            }
+        ),
+    )
+}
+
+/// KDE Plasma: the KWin focus script (installed / enabled / reporting).
+/// Without it on Wayland the focus is unknown and text is only copied.
+pub fn kwin_checks(k: &setup::KwinStatus, x11: bool) -> Vec<Check> {
+    let missing = if x11 { "warn" } else { "fail" };
+    vec![
+        if k.kwin_script_installed {
+            check("kwin-script", "ok", "installed")
+        } else {
+            check(
+                "kwin-script",
+                missing,
+                "Scribiva KWin script not installed; reinstall the scribiva package",
+            )
+        },
+        if k.kwin_script_enabled {
+            check("kwin-script-enabled", "ok", "enabled in KWin")
+        } else {
+            check(
+                "kwin-script-enabled",
+                missing,
+                "not enabled; enable \"Scribiva focus\" in System Settings > KWin Scripts",
+            )
+        },
+        if k.kwin_focus_active {
+            check("kwin-focus", "ok", "receiving focus updates from KWin")
+        } else if x11 {
+            check(
+                "kwin-focus",
+                "warn",
+                "no focus updates (X11 uses xprop instead)",
+            )
+        } else {
+            check(
+                "kwin-focus",
+                "fail",
+                "no focus updates from KWin yet; dictated text is only copied",
+            )
+        },
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kwin_check_states() {
+        let all = setup::KwinStatus {
+            kde: true,
+            kwin_script_installed: true,
+            kwin_script_enabled: true,
+            kwin_focus_active: true,
+        };
+        let c = kwin_checks(&all, false);
+        assert_eq!(
+            c.iter().map(|c| (c.id, c.status)).collect::<Vec<_>>(),
+            [
+                ("kwin-script", "ok"),
+                ("kwin-script-enabled", "ok"),
+                ("kwin-focus", "ok")
+            ]
+        );
+        let none = setup::KwinStatus {
+            kde: true,
+            ..Default::default()
+        };
+        assert!(kwin_checks(&none, false).iter().all(|c| c.status == "fail"));
+        assert!(kwin_checks(&none, true).iter().all(|c| c.status == "warn"));
     }
 }

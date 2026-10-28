@@ -1,0 +1,19 @@
+{
+  "KPlugin": {
+    "Id": "scribiva-focus",
+    "Name": "Scribiva focus",
+    "Description": "Companion for the Scribiva voice-dictation client. Tells the local Scribiva app over the session D-Bus which window is focused (app id, WM class, window id and process id, never titles or content), so dictated text is only inserted into the window that was focused when recording stopped.",
+    "Authors": [
+      {
+        "Name": "Scribiva"
+      }
+    ],
+    "Category": "Accessibility",
+    "License": "MIT",
+    "Version": "1.0",
+    "EnabledByDefault": false
+  },
+  "KPackageStructure": "KWin/Script",
+  "X-Plasma-API": "javascript",
+  "X-Plasma-MainScript": "code/main.js"
+}

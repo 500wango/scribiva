@@ -61,6 +61,13 @@ pub async fn mic_test(app: AppHandle) -> Result<Value, String> {
     Ok(serde_json::json!({ "peak": peak, "rms": rms }))
 }
 
+/// Whether signed update checks are possible in this build (a real
+/// minisign public key is configured).
+#[tauri::command]
+pub fn updates_enabled(app: AppHandle) -> bool {
+    crate::updater::enabled(&app)
+}
+
 #[tauri::command]
 pub fn last(app: AppHandle) -> LastView {
     native(&app).last()
@@ -83,6 +90,13 @@ pub fn action(app: AppHandle, name: String) -> Result<(), String> {
         "clear-last" => n.clear_last(),
         "copy-last" => n.copy_last(false)?,
         "copy-raw" => n.copy_last(true)?,
+        // "Insert anyway" / "insert again": explicit user request from this
+        // window, which is hidden first so the previous window gets focus back.
+        "insert-last" => n.insert_last(true),
+        "discard-last" => n.discard_last(),
+        "check-update" => crate::updater::check_soon(&n),
+        "install-update" => crate::updater::install(&n)?,
+        "open-release-page" => crate::updater::open_release_page(&app)?,
         _ => return Err("Unsupported action".into()),
     }
     Ok(())
@@ -152,7 +166,8 @@ pub async fn setup_status() -> Result<Value, String> {
 }
 
 /// Linux: `action` = `hotkey` (bind the GNOME shortcut, optional `binding`
-/// accelerator) or `extension` (enable the GNOME extension).
+/// accelerator), `extension` (enable the GNOME extension) or `kwin` (enable
+/// and load the KDE KWin focus script; returns `{kwin, status}`).
 #[tauri::command]
 pub async fn setup(
     app: AppHandle,

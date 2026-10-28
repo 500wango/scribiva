@@ -56,3 +56,15 @@
 - Account deletion (`DELETE /v1/me/data`) revokes server tokens and removes jobs/transcripts; `service delete --confirm` also clears local credentials.
 - 121 offline tests pass, including client curl → local server integration with a fake provider, signed Stripe events, and billing-entrypoint/error-mapping checks.
 - Still open: TLS termination, backups, magic-link login, Tauri billing UI, production Stripe test-mode E2E, and actual US deployment. PostgreSQL/multi-instance rate limits are deferred (ADR-011).
+
+## v1.0 implementation status (2026-10-29)
+
+Built and covered by automated tests; not yet verified on real hardware unless noted.
+
+- Desktop (Rust + Tauri 2, one core for Windows and Linux): device login, dictation with FLAC upload, silence trim, local mic-signal and no-speech checks, focus guard, GNOME in-compositor insertion, KDE KWin focus script, X11 fallback, recording HUD (Windows/X11), tray, autostart, signed auto-update (inactive until a key is configured), outcome reporting, settings/onboarding/recovery in zh/en.
+- GNOME extension with hot-reloadable implementation (no logout after updates). Loaded in a real session by the developer: v1 only.
+- Server: auth, quota with month-end grace, dictionary, commands, hallucination flag, OpenCC, Stripe (events ordered, return pages), outcome metrics, backups, deployment files.
+- Linux .deb without Python, tested by install/remove in a clean Ubuntu 24.04 container. Windows NSIS built only by CI (not run yet).
+- CI and draft-release workflows written and linted; not yet run on GitHub.
+
+Open before launch: real-device QA (Windows, GNOME, KDE, X11), 20-language quality set, Obsidian undo checks, production deployment and Groq check from the US server, Stripe test-mode end to end, code-signing certificate, updater key, legal review, pricing.
