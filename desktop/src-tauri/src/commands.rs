@@ -102,6 +102,14 @@ pub mod linux_cmds {
         require_delete_confirmation(&confirm)?;
         linux::delete_data()
     }
+    #[tauri::command]
+    pub fn linux_setup_status() -> Result<Value, String> {
+        linux::setup_status()
+    }
+    #[tauri::command]
+    pub fn linux_setup(action: String, binding: Option<String>) -> Result<Value, String> {
+        linux::setup(&action, binding.as_deref())
+    }
 }
 
 // ---------------------------------------------------------------- Windows

@@ -85,9 +85,17 @@ def _session_file(record: dict) -> Path | None:
         return None
 
 
+# Directory that contains the ``scribiva`` package, whatever the install layout
+# (/usr/lib/scribiva/src for the .deb, ~/.local/share/scribiva/app/src for a
+# source install). Passed explicitly so workers never depend on PYTHONPATH.
+PACKAGE_ROOT = str(Path(__file__).resolve().parents[1])
+_AUX = ('import sys; sys.path.insert(0, sys.argv[1]); del sys.argv[1]; '
+        'from scribiva.cli import main; raise SystemExit(main())')
+
+
 def launch_aux(cmd: str, job_id: str):
     with LOG_PATH.open('a') as output:
-        subprocess.Popen([sys.executable, '-m', 'scribiva', cmd, job_id],
+        subprocess.Popen([sys.executable, '-I', '-B', '-c', _AUX, PACKAGE_ROOT, cmd, job_id],
                          start_new_session=True, close_fds=True, stdin=subprocess.DEVNULL,
                          stdout=output, stderr=output)
 

@@ -10,10 +10,14 @@ import subprocess
 import time
 
 
+# Bundled by the .deb (Apache-2.0, license in /usr/share/doc/scribiva/).
+BUNDLED_EITYPE = '/usr/lib/scribiva/bin/eitype'
+
+
 def eitype_command() -> str:
-    local = os.path.expanduser('~/.cargo/bin/eitype')
-    if os.path.isfile(local) and os.access(local, os.X_OK):
-        return local
+    for candidate in (os.path.expanduser('~/.cargo/bin/eitype'), BUNDLED_EITYPE):
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
     exe = shutil.which('eitype')
     if not exe:
         raise RuntimeError('eitype missing; set up libei/eitype on GNOME Wayland')

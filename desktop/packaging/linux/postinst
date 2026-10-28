@@ -1,0 +1,9 @@
+#!/bin/sh
+set -e
+# Nothing user-specific happens here: the shortcut and the GNOME extension are
+# enabled per user from the app's setup guide (no root, no changes to other
+# users' settings).
+if [ "$1" = "configure" ] && command -v update-desktop-database >/dev/null 2>&1; then
+  update-desktop-database -q /usr/share/applications || true
+fi
+exit 0

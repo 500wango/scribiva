@@ -5,7 +5,7 @@
 | 平台 | 第一批制品建议 | 注意 |
 |---|---|---|
 | Windows | 经签名的安装包（MSI / NSIS 择一） | 代码签名、卸载、自动更新、权限兼容测试 |
-| Ubuntu / Debian Linux | `.deb` | 明确支持的 glibc、依赖和 X11/Wayland 设置引导 |
+| Ubuntu / Debian Linux | `.deb`（单一软件包：应用 + Python 核心 + GNOME 扩展 + eitype） | 明确支持的 glibc、依赖和 X11/Wayland 设置引导；随包附 eitype 的 Apache-2.0 许可证与依赖清单 |
 | Fedora Linux | `.rpm` | 若列为正式支持必须产出并验证；不能仅用 `.deb` 覆盖 |
 | 通用 Linux | AppImage（可选） | 权限、Portal、输入驱动依赖不能因自包含包消失 |
 

@@ -51,6 +51,17 @@ TLS uses rustls with the `ring` provider (not reqwest's default `aws-lc-rs`, who
 
 ## Packaging
 
-`bundle.active` is on: Windows `nsis` (per-user install, no admin), Linux `deb`. The `.deb` does not bundle the Python core; Linux users still install it with `scripts/install-ubuntu.sh`.
+`bundle.active` is on: Windows `nsis` (per-user install, no admin), Linux `deb`.
+
+The Linux `.deb` is self-contained: the Tauri app (`/usr/bin/scribiva`), the Python core (`/usr/lib/scribiva/src`, run as `/usr/bin/scribiva-cli`), the GNOME Shell extension (`/usr/share/gnome-shell/extensions/scribiva@scribiva.app`) and eitype 0.2.2 (`/usr/lib/scribiva/bin/eitype`, Apache-2.0, licenses in `/usr/share/doc/scribiva/`). Runtime packages are declared in `Depends`. Shortcut and extension are enabled per user from the first-run guide (`scribiva-cli setup`), never by the root maintainer scripts.
+
+Build it:
+
+```bash
+bash packaging/linux/stage.sh          # builds eitype =0.2.2 with --locked; or set EITYPE_BIN
+npx tauri build --bundles deb
+```
+
+`scripts/install-ubuntu.sh` remains the developer install from a source checkout.
 
 **Code signing is not configured.** `bundle.windows.certificateThumbprint` is `null` and `timestampUrl` is empty on purpose. Before release, set them (or `signCommand`) for the real certificate; unsigned installers trigger SmartScreen and fail FR-012.

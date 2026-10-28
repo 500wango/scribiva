@@ -47,6 +47,8 @@ fn main() {
             linux_logout,
             linux_open_billing,
             linux_delete_data,
+            linux_setup_status,
+            linux_setup,
         ])
         .setup(|app| {
             use tauri::Manager;

@@ -70,7 +70,13 @@ const en = {
   ob_agree: 'I understand and agree', ob_next: 'Next', ob_back: 'Back', ob_finish: 'Finish',
   ob_login_title: 'Sign in', ob_mic_title: 'Microphone test', ob_hotkey_title: 'Hotkey',
   ob_hotkey_body: 'Press {hotkey} anywhere to start, again to stop. Esc cancels. Scribiva stays in the tray and will not take focus.',
-  ob_linux_hint: 'On Linux, the hotkey and input backend are configured by the Scribiva CLI (see Diagnostics).',
+  ob_linux_hint: 'Set up the shortcut and the GNOME extension below.',
+  loading: 'Loading…', lx_hotkey_title: 'Global shortcut', lx_hotkey_done: 'Bound to {binding}.', lx_hotkey_missing: 'Not set yet. Scribiva will add a GNOME custom shortcut (Ctrl+Alt+V) without changing your other shortcuts.',
+  lx_hotkey_manual: 'This desktop cannot be configured automatically. Add a shortcut that runs: scribiva-cli toggle', lx_hotkey_bind: 'Set up Ctrl+Alt+V', lx_hotkey_rebind: 'Bind again',
+  lx_ext_title: 'Scribiva GNOME extension', lx_ext_ok: 'Active: Scribiva can confirm the target window before pasting.', lx_ext_pending: 'Enabled; it loads after you log out and back in.',
+  lx_ext_off: 'Installed but not enabled.', lx_ext_missing: 'Not installed. Reinstall the scribiva package.', lx_ext_enable: 'Enable extension',
+  lx_ext_why: 'GNOME only lets its own extensions see which window is focused. Without it Scribiva copies text instead of pasting.',
+  lx_relogin: 'Log out and back in once so GNOME loads the extension.',
   error: 'Error',
 };
 
@@ -137,8 +143,14 @@ const zh: Record<Key, string> = {
   ob_privacy_title: '隐私说明', ob_privacy: '为完成转写，录音会上传到位于美国的 Scribiva 服务器，并由 Groq 进行语音识别与文本处理。对中国大陆用户而言这属于数据出境。Scribiva 只在你按下快捷键后录音。',
   ob_agree: '我已了解并同意', ob_next: '下一步', ob_back: '上一步', ob_finish: '完成',
   ob_login_title: '登录', ob_mic_title: '麦克风测试', ob_hotkey_title: '快捷键',
+  loading: '读取中…', lx_hotkey_title: '全局快捷键', lx_hotkey_done: '已绑定 {binding}。', lx_hotkey_missing: '尚未设置。Scribiva 会添加一个 GNOME 自定义快捷键（Ctrl+Alt+V），不改动你的其他快捷键。',
+  lx_hotkey_manual: '当前桌面无法自动配置。请手动添加一个运行以下命令的快捷键：scribiva-cli toggle', lx_hotkey_bind: '设置 Ctrl+Alt+V', lx_hotkey_rebind: '重新绑定',
+  lx_ext_title: 'Scribiva GNOME 扩展', lx_ext_ok: '已生效：粘贴前会确认目标窗口没有变化。', lx_ext_pending: '已启用，注销并重新登录后生效。',
+  lx_ext_off: '已安装，但未启用。', lx_ext_missing: '未安装，请重新安装 scribiva 软件包。', lx_ext_enable: '启用扩展',
+  lx_ext_why: 'GNOME 只允许自己的扩展读取当前焦点窗口。没有扩展时 Scribiva 只复制文字，不自动粘贴。',
+  lx_relogin: '请注销并重新登录一次，让 GNOME 加载扩展。',
   ob_hotkey_body: '在任意位置按 {hotkey} 开始，再按一次停止，Esc 取消。Scribiva 常驻托盘，不会抢占焦点。',
-  ob_linux_hint: 'Linux 上的快捷键与输入后端由 Scribiva CLI 配置（见环境诊断）。',
+  ob_linux_hint: '在下方设置快捷键并启用 GNOME 扩展。',
   error: '错误',
 };
 

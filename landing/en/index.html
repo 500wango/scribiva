@@ -180,9 +180,9 @@
         </tr>
         <tr>
           <th scope="row">Ubuntu 24.04 / 26.04, GNOME Wayland</th>
-          <td data-label="Insertion"><span class="mode-paste">Auto-paste with extension</span></td>
+          <td data-label="Insertion"><span class="mode-paste">Auto-paste once the extension is enabled</span></td>
           <td data-label="Status"><span class="badge">Beta / in testing</span></td>
-          <td data-label="Notes">Requires the Scribiva GNOME extension to confirm the focused window. Without it, copy only.</td>
+          <td data-label="Notes">The package includes the Scribiva GNOME extension. Enable it with one click in the first-run guide, then log out and back in. Until then, copy only.</td>
         </tr>
         <tr>
           <th scope="row">KDE Plasma Wayland</th>
@@ -309,7 +309,10 @@
           <dd><code data-cfg="linux_deb_sha256">[SHA-256 待发布 / pending]</code></dd>
           <dt>Verify in a terminal</dt>
           <dd><pre class="cmd">sha256sum scribiva_*.deb</pre></dd>
+          <dt>Install</dt>
+          <dd><pre class="cmd">sudo apt install ./scribiva_*.deb</pre></dd>
         </dl>
+        <p class="meta">One package contains the app, the dictation core, the GNOME extension and the eitype paste helper; apt installs the dependencies. Set up the shortcut in the first-run guide.</p>
       </div>
     </div>
   </div>

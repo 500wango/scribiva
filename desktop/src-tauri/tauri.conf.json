@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Scribiva",
-  "version": "0.2.0-alpha.1",
+  "version": "1.0.0",
   "identifier": "app.scribiva.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -85,8 +85,41 @@
     },
     "linux": {
       "deb": {
-        "depends": []
+        "section": "utils",
+        "priority": "optional",
+        "depends": [
+          "libc6 (>= 2.39)",
+          "python3 (>= 3.10)",
+          "pipewire-bin",
+          "wireplumber",
+          "wl-clipboard",
+          "curl",
+          "libnotify-bin",
+          "libxkbcommon0"
+        ],
+        "recommends": [
+          "ffmpeg",
+          "x11-utils"
+        ],
+        "files": {
+          "/usr/bin/scribiva-cli": "../packaging/linux/scribiva-cli",
+          "/usr/lib/scribiva/src": "../packaging/linux/stage/lib/src",
+          "/usr/lib/scribiva/web": "../packaging/linux/stage/lib/web",
+          "/usr/lib/scribiva/bin/eitype": "../packaging/linux/stage/lib/bin/eitype",
+          "/usr/share/gnome-shell/extensions/scribiva@scribiva.app": "../packaging/linux/stage/extension",
+          "/usr/share/doc/scribiva/copyright": "../packaging/linux/stage/doc/copyright",
+          "/usr/share/doc/scribiva/LICENSE": "../packaging/linux/stage/doc/LICENSE",
+          "/usr/share/doc/scribiva/LICENSE.eitype": "../packaging/linux/stage/doc/LICENSE.eitype",
+          "/usr/share/doc/scribiva/THIRD-PARTY-eitype.txt": "../packaging/linux/stage/doc/THIRD-PARTY-eitype.txt"
+        },
+        "postInstallScript": "../packaging/linux/postinst",
+        "postRemoveScript": "../packaging/linux/postrm"
       }
-    }
-  }
+    },
+    "longDescription": "Press a global shortcut, speak, and Scribiva types the text\ninto the app you are using. 20 speech languages, grammar correction and\nObsidian support. Audio is processed on Scribiva servers in the United States.",
+    "homepage": "https://github.com/500wango/scribiva",
+    "copyright": "Scribiva contributors, AGPL-3.0-only",
+    "license": "AGPL-3.0-only"
+  },
+  "mainBinaryName": "scribiva"
 }

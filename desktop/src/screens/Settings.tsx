@@ -4,6 +4,7 @@
 // options stay hidden on Linux and new Linux CLI options appear once the CLI
 // supports them.
 import { useCallback, useEffect, useId, useState } from 'react';
+import { LinuxSetup } from './LinuxSetup';
 import { MIC_KEY, type Devices } from '../backend';
 import { SPEECH_LANGUAGES } from '../i18n';
 import { has, Section, Select, Toggle, useApp } from '../ui';
@@ -70,7 +71,7 @@ export function SettingsScreen() {
       <Section title={t('sec_input')}>
         {backend.isWindows && <HotkeyField value={str('hotkey')} error={status?.hotkeyError}
           onCommit={v => save('hotkey', v)} />}
-        {!backend.isWindows && <p className="muted">{t('ob_linux_hint')}</p>}
+        {!backend.isWindows && <LinuxSetup />}
         {has(s, 'auto_insert') && (
           <Toggle label={t('autoInsert')} checked={bool('auto_insert')} risk={t('autoInsertRisk')}
             onChange={v => save('auto_insert', v)} />

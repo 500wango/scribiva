@@ -197,6 +197,15 @@ export class Backend {
   async deleteData(confirm: string): Promise<void> {
     await invoke(this.isWindows ? 'win_delete_data' : 'linux_delete_data', { confirm });
   }
+  /** Linux only: GNOME shortcut and extension state (scribiva setup status). */
+  async linuxSetupStatus(): Promise<LinuxSetup> {
+    const r = await invoke<{ status?: LinuxSetup } & LinuxSetup>('linux_setup_status');
+    return (r.status ?? r) as LinuxSetup;
+  }
+  async linuxSetup(action: 'hotkey' | 'extension', binding?: string): Promise<LinuxSetupResult> {
+    return invoke<LinuxSetupResult>('linux_setup', { action, binding: binding ?? null });
+  }
+
 }
 
 /** Per-viewer UI preferences that the Linux CLI does not store. */
@@ -207,4 +216,16 @@ export const local = {
   set(key: string, value: string) {
     try { window.localStorage.setItem('scribiva.' + key, value); } catch { /* storage unavailable */ }
   },
+};
+
+export type LinuxSetup = {
+  session: string;
+  gnome: boolean;
+  hotkey: { available: boolean; installed: boolean; binding?: string };
+  extension: { installed: boolean; enabled: boolean; active: boolean };
+};
+export type LinuxSetupResult = {
+  status: LinuxSetup;
+  hotkey?: { binding: string };
+  extension?: { enabled: boolean; active: boolean; needs_relogin?: boolean };
 };

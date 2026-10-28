@@ -117,6 +117,11 @@ def main(argv=None) -> int:
                    help='Required for `service delete` (server-side account data deletion)')
     p.add_argument('--token', action='store_true',
                    help='`service login`: paste an existing scr_ token instead of browser login')
+    p = commands.add_parser('setup', help='Desktop integration: GNOME shortcut and extension')
+    p.add_argument('action', nargs='?', default='status',
+                   choices=['status', 'hotkey', 'extension', 'all'])
+    p.add_argument('--binding', default='<Primary><Alt>v',
+                   help='GNOME accelerator for `setup hotkey` (default Ctrl+Alt+V)')
     p = commands.add_parser('dictionary', help='Show or replace the personal dictionary')
     p.add_argument('action', nargs='?', default='list',
                    choices=['list', 'add', 'remove', 'set-json'])
@@ -237,6 +242,18 @@ def main(argv=None) -> int:
                 print('Local service token and URL cleared')
             else:
                 raise ValueError('Unsupported service action')
+        elif args.cmd == 'setup':
+            from . import setup as desktop_setup
+            result = {}
+            if args.action in ('hotkey', 'all'):
+                result['hotkey'] = desktop_setup.bind_hotkey(args.binding)
+            if args.action in ('extension', 'all'):
+                result['extension'] = desktop_setup.enable_extension()
+            result['status'] = desktop_setup.status()
+            print(json.dumps(result, indent=2, ensure_ascii=False))
+            if result.get('extension', {}).get('needs_relogin'):
+                print('Log out and back in once so GNOME loads the Scribiva extension.',
+                      file=sys.stderr)
         elif args.cmd == 'dictionary':
             conf = read_config()
             if not providers.service_configured(conf):

@@ -9,6 +9,8 @@ from urllib.parse import urlsplit
 from .config import LANGUAGES, mic_node, read_config, save_config, service_token
 from . import devices, engine, inject, providers
 
+# Source tree and ~/.local install: <root>/src/scribiva -> <root>/web.
+# The .deb installs the same layout under /usr/lib/scribiva.
 HTML = Path(__file__).resolve().parents[2] / 'web' / 'index.html'
 MAX_BODY = 4096
 CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "

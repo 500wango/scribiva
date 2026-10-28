@@ -1,2 +1,2 @@
-"""Scribiva Linux-first dictation core (developer alpha)."""
-__version__ = '0.2.0-alpha.1'
+"""Scribiva Linux dictation core."""
+__version__ = '1.0.0'

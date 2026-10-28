@@ -1,6 +1,6 @@
 [package]
 name = "scribiva-desktop"
-version = "0.2.0-alpha.1"
+version = "1.0.0"
 edition = "2021"
 rust-version = "1.88"
 description = "Scribiva desktop shell: Linux CLI bridge + native Windows core"

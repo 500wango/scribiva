@@ -19,7 +19,15 @@ This is a **real, runnable Linux dictation core**, not a finished commercial rel
 - Optional **subscription service mode**: `scribiva service login --url ...` moves ASR/grammar calls behind the bundled server, stores only a `scr_...` token locally, and keeps the Groq key on the server. The dashboard and CLI show plan/quota and print Stripe Checkout/Portal links.
 - Server skeleton: Bearer tokens stored SHA-256-hashed, transactional quota reservation, per-user idempotency, cancel/expiry, rate limiting, signed Stripe webhooks, account-data deletion, and offline tests with mocked providers.
 
-## Quick start (your Ubuntu machine)
+## Install (Ubuntu / Linux Mint)
+
+```bash
+sudo apt install ./scribiva_1.0.0_amd64.deb
+```
+
+One package contains the desktop app, the dictation core (`scribiva-cli`), the Scribiva GNOME Shell extension and eitype; apt installs the runtime dependencies. Start **Scribiva** from the app menu and follow the setup guide: it binds Ctrl+Alt+V and enables the GNOME extension for your user (log out and back in once). Build the package with the steps in [`desktop/README.md`](desktop/README.md).
+
+## Developer install from source
 
 **Stop any currently active Gate 2B recording first.** From this repository root:
 
@@ -34,7 +42,7 @@ If you already created the Gate 1 GNOME shortcut pointing at `~/.local/bin/scrib
 If no shortcut exists, run:
 
 ```bash
-python3 scripts/bind-gnome-hotkey.py
+~/.local/bin/scribiva setup all      # GNOME shortcut + extension
 ```
 
 Do not execute Scribiva with `sudo`.
@@ -119,7 +127,7 @@ If previous Groq key is still saved in `~/.config/scribiva/groq-api-key` it is r
 sudo apt install -y python3 pipewire-bin wireplumber wl-clipboard curl libnotify-bin
 ```
 
-`eitype` must already be installed and authorized on GNOME Wayland (you completed this in Gate 1). The alpha does not install or elevate device drivers. If the GNOME shortcut is missing or conflicts, use `python3 scripts/bind-gnome-hotkey.py` after installation.
+For a source install `eitype` must be installed separately (`cargo install --locked eitype`); the .deb bundles it. The alpha does not install or elevate device drivers. If the GNOME shortcut is missing or conflicts, run `scribiva setup hotkey --binding "<Primary><Alt>space"` (any free combination).
 
 ## Repo map
 

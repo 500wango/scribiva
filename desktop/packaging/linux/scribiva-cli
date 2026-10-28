@@ -1,0 +1,6 @@
+#!/bin/sh
+# Scribiva core (Python). Installed by the scribiva .deb; used by the desktop
+# app, the GNOME shortcut (`scribiva-cli toggle`) and power users.
+# -I (isolated: ignores PYTHONPATH, user site and the current directory) and
+# -B (no bytecode in /usr/lib); the package path is therefore set explicitly.
+exec /usr/bin/python3 -I -B -c 'import sys; sys.path.insert(0, "/usr/lib/scribiva/src"); sys.argv[0] = "scribiva-cli"; from scribiva.cli import main; raise SystemExit(main())' "$@"

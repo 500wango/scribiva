@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { local } from '../backend';
 import { LoginPanel } from './Account';
 import { MicTest } from './Settings';
+import { LinuxSetup } from './LinuxSetup';
 import { useApp } from '../ui';
 
 export function Onboarding({ onDone }: { onDone: () => void }) {
@@ -44,7 +45,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
             <h2>{t('ob_hotkey_title')}</h2>
             <p>{t('ob_hotkey_body', { hotkey: status?.hotkey || 'Ctrl+Alt+V' })}</p>
             {status?.hotkeyError && <p className="error-text" role="alert">{status.hotkeyError}</p>}
-            {!backend.isWindows && <p className="muted">{t('ob_linux_hint')}</p>}
+            {!backend.isWindows && <LinuxSetup />}
           </>
         )}
       </section>

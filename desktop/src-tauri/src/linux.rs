@@ -1,6 +1,7 @@
-//! Linux bridge: whitelisted calls into the installed Python CLI
-//! (`~/.local/bin/scribiva`). Rust never accepts arbitrary command paths or
-//! shell strings; arguments are passed as an argv array.
+//! Linux bridge: whitelisted calls into the Python core. The `.deb` installs
+//! it as `/usr/bin/scribiva-cli`; a source install (`scripts/install-ubuntu.sh`)
+//! puts it at `~/.local/bin/scribiva`. Rust never accepts arbitrary command
+//! paths or shell strings; arguments are passed as an argv array.
 
 use serde_json::Value;
 use std::io::{BufRead, BufReader};
@@ -8,11 +9,21 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use tauri::{AppHandle, Emitter};
 
+/// Packaged core first; the source install is the developer fallback.
+const PACKAGED_CLI: &str = "/usr/bin/scribiva-cli";
+
 fn binary() -> Result<PathBuf, String> {
+    let packaged = PathBuf::from(PACKAGED_CLI);
+    if packaged.is_file() {
+        return Ok(packaged);
+    }
     let home = std::env::var("HOME").map_err(|_| "HOME not defined".to_string())?;
     let path = PathBuf::from(home).join(".local/bin/scribiva");
     if !path.is_file() {
-        return Err("Install the Linux core first: bash scripts/install-ubuntu.sh".to_string());
+        return Err(
+            "Scribiva core not found: reinstall the scribiva package (sudo apt install --reinstall scribiva)"
+                .to_string(),
+        );
     }
     Ok(path)
 }
@@ -125,6 +136,49 @@ pub fn billing_url(portal: bool, plan: &str) -> Result<String, String> {
     Ok(out.lines().next().unwrap_or_default().trim().to_string())
 }
 
+/// First-run desktop integration: GNOME shortcut and extension state.
+pub fn setup_status() -> Result<Value, String> {
+    invoke_json(&["setup", "status"])
+}
+
+pub fn setup(action: &str, binding: Option<&str>) -> Result<Value, String> {
+    match action {
+        "hotkey" | "extension" | "all" => {}
+        _ => return Err("Unsupported setup action".into()),
+    }
+    let mut args = vec!["setup", action];
+    if let Some(b) = binding {
+        if !valid_gnome_binding(b) {
+            return Err("Unsupported shortcut".into());
+        }
+        args.push("--binding");
+        args.push(b);
+    }
+    invoke_json(&args)
+}
+
+/// GNOME accelerator such as `<Primary><Alt>v`: at least one modifier, one key,
+/// and never a paste chord (that would fire on every paste).
+pub fn valid_gnome_binding(b: &str) -> bool {
+    const MODS: &[&str] = &["<Primary>", "<Control>", "<Alt>", "<Shift>", "<Super>"];
+    if b.len() > 64 || !b.is_ascii() {
+        return false;
+    }
+    let mut rest = b;
+    let mut mods = Vec::new();
+    while let Some(m) = MODS.iter().find(|m| rest.starts_with(**m)) {
+        mods.push(*m);
+        rest = &rest[m.len()..];
+    }
+    let key_ok = !rest.is_empty() && rest.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    let ctrl = mods.iter().any(|m| *m == "<Primary>" || *m == "<Control>");
+    let only_ctrl_or_shift = mods
+        .iter()
+        .all(|m| matches!(*m, "<Primary>" | "<Control>" | "<Shift>"));
+    let paste = ctrl && only_ctrl_or_shift && rest.eq_ignore_ascii_case("v");
+    !mods.is_empty() && key_ok && !paste
+}
+
 pub fn logout() -> Result<String, String> {
     invoke(&["service", "logout"])
 }
@@ -170,4 +224,20 @@ pub fn login(app: AppHandle, url: &str) -> Result<(), String> {
         );
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::valid_gnome_binding;
+
+    #[test]
+    fn gnome_bindings() {
+        assert!(valid_gnome_binding("<Primary><Alt>v"));
+        assert!(valid_gnome_binding("<Super>space"));
+        assert!(!valid_gnome_binding("<Primary>v"));
+        assert!(!valid_gnome_binding("<Primary><Shift>v"));
+        assert!(!valid_gnome_binding("v"));
+        assert!(!valid_gnome_binding("<Primary><Alt>v; rm -rf"));
+        assert!(!valid_gnome_binding("<Primary><Alt>"));
+    }
 }
