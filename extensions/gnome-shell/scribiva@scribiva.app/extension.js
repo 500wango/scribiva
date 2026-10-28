@@ -1,8 +1,15 @@
 // Scribiva GNOME Shell extension (ADR-012).
 //
-// Exposes the focused window's app id / WM class / window id / pid on the
-// session bus so the local Scribiva client can verify the paste target, and
-// shows a top-bar recording indicator that never takes keyboard focus.
+// - GetFocus: the focused window's app id / WM class / window id / pid, so the
+//   Scribiva client can remember the target when recording stops.
+// - InsertText: types the result into that window. When the focused text
+//   field speaks the Wayland text-input protocol (GTK, Qt, Firefox, …) the text
+//   is committed through the input method, exactly like GNOME's on-screen
+//   keyboard: no clipboard, full Unicode, one undo step. Otherwise it falls back
+//   to clipboard + a single Ctrl+V from a virtual keyboard. The focus check and
+//   the insertion happen in one step inside the compositor, so the text cannot
+//   land in a window the user switched to in the meantime.
+// - A top-bar recording indicator that never takes keyboard focus.
 // Window titles and window content are never read or exposed.
 
 import Clutter from 'gi://Clutter';
@@ -18,7 +25,10 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 
 const BUS_NAME = 'app.scribiva.Shell';
 const OBJECT_PATH = '/app/scribiva/Shell';
-const INTERFACE_VERSION = '1';
+const INTERFACE_VERSION = '2';
+const PASTE_SETTLE_MS = 60;
+const RESTORE_DELAY_MS = 800;
+const MAX_TEXT = 100000;
 
 // Non-idle states fall back to idle if the client stops updating us
 // (e.g. it crashed mid-recording), so the indicator cannot get stuck.
@@ -32,6 +42,12 @@ const INTERFACE_XML = `
       <arg type="s" name="wm_class" direction="out"/>
       <arg type="t" name="window_id" direction="out"/>
       <arg type="u" name="pid" direction="out"/>
+    </method>
+    <method name="InsertText">
+      <arg type="s" name="text" direction="in"/>
+      <arg type="t" name="expected_window_id" direction="in"/>
+      <arg type="a{sv}" name="options" direction="in"/>
+      <arg type="s" name="outcome" direction="out"/>
     </method>
     <method name="SetState">
       <arg type="s" name="phase" direction="in"/>
@@ -87,10 +103,54 @@ class ScribivaIndicator extends PanelMenu.Button {
     }
 });
 
+function sleep(ms) {
+    return new Promise(resolve => {
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, ms, () => {
+            resolve();
+            return GLib.SOURCE_REMOVE;
+        });
+    });
+}
+
+function clipboardText() {
+    return new Promise(resolve => {
+        St.Clipboard.get_default().get_text(St.ClipboardType.CLIPBOARD,
+            (_clipboard, text) => resolve(text));
+    });
+}
+
+// Dictated text is data: drop control characters except newline and tab, and
+// never produce a carriage return (no Enter is ever sent).
+function sanitize(text, singleLine) {
+    let out = text.replace(/\r\n?/g, '\n')
+        .replace(/[\u0000-\u0008\u000b-\u001f\u007f\u0080-\u009f]/g, '');
+    if (singleLine)
+        out = out.replace(/[\n\t]+/g, ' ');
+    return out;
+}
+
+function boolOption(options, name, fallback) {
+    const value = options[name];
+    if (value === undefined)
+        return fallback;
+    const unpacked = value instanceof GLib.Variant ? value.deepUnpack() : value;
+    return unpacked === true;
+}
+
+function stringOption(options, name, fallback) {
+    const value = options[name];
+    if (value === undefined)
+        return fallback;
+    const unpacked = value instanceof GLib.Variant ? value.deepUnpack() : value;
+    return typeof unpacked === 'string' ? unpacked : fallback;
+}
+
 // D-Bus implementation object. Method/property names must match the XML.
 class ScribivaService {
-    constructor(onSetState) {
+    constructor(onSetState, keyboard) {
         this._onSetState = onSetState;
+        this._keyboard = keyboard;
+        this._busy = false;
     }
 
     get Version() {
@@ -127,6 +187,94 @@ class ScribivaService {
     SetState(phase) {
         this._onSetState(phase);
     }
+
+    InsertTextAsync(params, invocation) {
+        const [text, expectedId, options] = params;
+        this._insert(text, expectedId, options)
+            .then(outcome => invocation.return_value(new GLib.Variant('(s)', [outcome])))
+            .catch(error => {
+                console.error(`Scribiva InsertText failed: ${error}`);
+                invocation.return_value(new GLib.Variant('(s)', ['failed']));
+            });
+    }
+
+    async _insert(rawText, expectedId, options) {
+        if (typeof rawText !== 'string' || rawText.length === 0 || rawText.length > MAX_TEXT)
+            return 'invalid';
+        if (this._busy)
+            return 'busy';
+        if (Main.modalCount > 0)
+            return 'no_focus';
+        const win = global.display.get_focus_window();
+        if (!win)
+            return 'no_focus';
+        // GJS maps the D-Bus uint64 to a Number; window ids fit in 53 bits.
+        if (Number(win.get_id()) !== Number(expectedId))
+            return 'focus_changed';
+
+        const text = sanitize(rawText, boolOption(options, 'single_line', false));
+        if (text.length === 0)
+            return 'invalid';
+
+        // 1. Input-method commit into the focused text field.
+        if (Main.inputMethod.currentFocus) {
+            Main.inputMethod.commit(text);
+            return 'committed';
+        }
+
+        // 2. Clipboard + one Ctrl+V (apps without text-input, e.g. XWayland).
+        if (!boolOption(options, 'paste_fallback', true))
+            return 'no_text_input';
+        this._busy = true;
+        try {
+            const restore = boolOption(options, 'restore_clipboard', true);
+            const previous = restore ? await clipboardText() : null;
+            const clipboard = St.Clipboard.get_default();
+            clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
+            await sleep(PASTE_SETTLE_MS);
+            if (global.display.get_focus_window() !== win)
+                return 'focus_changed';
+            const withShift = stringOption(options, 'paste_shortcut', 'ctrl+v') === 'ctrl+shift+v';
+            this._keyboard.pressChord(withShift);
+            if (restore && typeof previous === 'string') {
+                await sleep(RESTORE_DELAY_MS);
+                // Only if nobody changed the clipboard after us.
+                if (await clipboardText() === text)
+                    clipboard.set_text(St.ClipboardType.CLIPBOARD, previous);
+            }
+            return 'pasted';
+        } finally {
+            this._busy = false;
+        }
+    }
+}
+
+// Virtual keyboard owned by the compositor itself: no portal, no uinput.
+class VirtualKeyboard {
+    constructor() {
+        const seat = Clutter.get_default_backend().get_default_seat();
+        this._device = seat.create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
+    }
+
+    _key(keyval, pressed) {
+        this._device.notify_keyval(GLib.get_monotonic_time(), keyval,
+            pressed ? Clutter.KeyState.PRESSED : Clutter.KeyState.RELEASED);
+    }
+
+    pressChord(withShift) {
+        this._key(Clutter.KEY_Control_L, true);
+        if (withShift)
+            this._key(Clutter.KEY_Shift_L, true);
+        this._key(Clutter.KEY_v, true);
+        this._key(Clutter.KEY_v, false);
+        if (withShift)
+            this._key(Clutter.KEY_Shift_L, false);
+        this._key(Clutter.KEY_Control_L, false);
+    }
+
+    destroy() {
+        this._device = null;
+    }
 }
 
 export default class ScribivaExtension extends Extension {
@@ -135,7 +283,8 @@ export default class ScribivaExtension extends Extension {
         Main.panel.addToStatusArea(this.uuid, this._indicator, 0, 'right');
         this._indicator.hide();
 
-        this._service = new ScribivaService(phase => this._setState(phase));
+        this._keyboard = new VirtualKeyboard();
+        this._service = new ScribivaService(phase => this._setState(phase), this._keyboard);
         this._dbus = Gio.DBusExportedObject.wrapJSObject(INTERFACE_XML, this._service);
         this._dbus.export(Gio.DBus.session, OBJECT_PATH);
 
@@ -159,6 +308,8 @@ export default class ScribivaExtension extends Extension {
             this._dbus = null;
         }
         this._service = null;
+        this._keyboard?.destroy();
+        this._keyboard = null;
 
         this._clearStateTimeout();
 

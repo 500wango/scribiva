@@ -141,6 +141,13 @@ pub fn setup_status() -> Result<Value, String> {
     invoke_json(&["setup", "status"])
 }
 
+/// Re-point a Scribiva shortcut left by an older install (deleted script,
+/// source install) at the packaged command. Keeps the user's key combination
+/// and does nothing when the user never set one up.
+pub fn repair_hotkey() {
+    let _ = invoke(&["setup", "repair"]);
+}
+
 pub fn setup(action: &str, binding: Option<&str>) -> Result<Value, String> {
     match action {
         "hotkey" | "extension" | "all" => {}

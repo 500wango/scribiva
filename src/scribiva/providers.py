@@ -15,6 +15,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 from . import __version__
+from . import postprocess, textguard
 from .config import (api_key, service_token, validate_service_url)
 
 BASE = 'https://api.groq.com/openai/v1'
@@ -399,44 +400,59 @@ def service_status(config: dict, token: str | None = None) -> dict:
             'account': service_me(config, token=token)}
 
 
-def transcribe(audio_path: Path, config: dict) -> str:
+def transcribe_verbose(audio_path: Path, config: dict, *, mime: str = 'audio/wav',
+                       prompt: str = '') -> dict:
+    """Direct-mode Whisper call returning text, detected language and segment
+    statistics (for the hallucination check, FR-017)."""
     if audio_path.stat().st_size > 24 * 1024 * 1024:
         raise ProviderError('Recording exceeds 24 MiB upload cap')
-    fields = ['file=@' + str(audio_path) + ';type=audio/wav',
-              'model=' + config['asr_model'], 'response_format=json', 'temperature=0']
+    if mime not in ('audio/wav', 'audio/flac'):
+        raise ProviderError('Unsupported upload format')
+    fields = ['file=@' + str(audio_path) + ';type=' + mime,
+              'model=' + config['asr_model'], 'response_format=verbose_json', 'temperature=0']
     if config['language'] != 'auto':
         fields.append('language=' + config['language'])
-    prompt = config.get('asr_prompt', '').strip()
-    if prompt and config['language'] != 'auto':
-        # Whisper prompt should match audio language. Avoid forcing English
-        # names into unknown-language input when auto-detection is enabled.
-        fields.append('prompt=' + prompt[:180])
+    if prompt:
+        fields.append('prompt=' + prompt)
     response = _request('/audio/transcriptions', fields=fields, config=config)
     text = response.get('text')
     if not isinstance(text, str) or not text.strip():
         raise ProviderError('ASR returned empty text (recording retained)')
-    return text.strip()
+    segments = response.get('segments')
+    detected = response.get('language')
+    return {
+        'text': text.strip(),
+        'language': detected if isinstance(detected, str) and detected else None,
+        'segments': [{'no_speech_prob': seg.get('no_speech_prob'),
+                      'avg_logprob': seg.get('avg_logprob')}
+                     for seg in segments if isinstance(seg, dict)]
+        if isinstance(segments, list) else [],
+    }
 
 
-PROTECTED_RE = re.compile(r'```[\s\S]*?```|`[^`\n]+`|https?://[^\s)]+|(?<!\w)(?:~/|/)[A-Za-z0-9_./-]+')
-NUMBERS_RE = re.compile(r'(?<!\w)\d+(?:[.,:/-]\d+)*(?!\w)')
-MARKER_RE = re.compile(r'^\s{0,3}(?:#{1,6}\s|[-*+]\s|\d+[.)]\s|>\s?)', re.M)
+def transcribe(audio_path: Path, config: dict) -> str:
+    return transcribe_verbose(audio_path, config, prompt=direct_prompt(config))['text']
 
 
-def _protect(text: str) -> tuple[str, dict[str, str]]:
-    parts = {}
-    def hide(match):
-        token = f'SCRIVPROTECT{len(parts):04d}END'
-        parts[token] = match.group(0)
-        return token
-    return PROTECTED_RE.sub(hide, text), parts
+def direct_terms(config: dict) -> list[str]:
+    """Direct mode has no server dictionary: ``asr_prompt`` holds the terms,
+    comma or newline separated."""
+    raw = str(config.get('asr_prompt') or '')
+    try:
+        return postprocess.clean_terms([t for t in re.split(r'[,，\n]', raw)])
+    except postprocess.DictionaryError:
+        return []
 
 
-def correct(text: str, config: dict) -> tuple[str, str | None]:
+def direct_prompt(config: dict) -> str:
+    return postprocess.asr_prompt(direct_terms(config))
+
+
+def correct(text: str, config: dict, terms: list[str] | None = None) -> tuple[str, str | None]:
     """Returns (processed_text, optional_warning). Fail closed to raw transcript."""
     if config['mode'] == 'raw':
         return text, None
-    protected, parts = _protect(text)
+    protected, parts = textguard.protect(text, terms)
     mode = config['mode']
     policy = ('Correct obvious grammar, punctuation and disfluencies conservatively; '
               'preserve speaker meaning, register, language, names and technical terminology.'
@@ -463,17 +479,6 @@ def correct(text: str, config: dict) -> tuple[str, str | None]:
         value = response['choices'][0]['message']['content']
         if not isinstance(value, str) or not value.strip():
             raise ValueError('Empty correction')
-        revised = value.strip()
-        for token, original in parts.items():
-            if revised.count(token) != 1:
-                raise ValueError('Protected token changed')
-            revised = revised.replace(token, original)
-        if NUMBERS_RE.findall(text) != NUMBERS_RE.findall(revised):
-            raise ValueError('Numeric content changed')
-        if MARKER_RE.findall(text) != MARKER_RE.findall(revised):
-            raise ValueError('Markdown structure changed')
-        if len(revised) > max(100, 3 * len(text)):
-            raise ValueError('Expansion exceeds allowed limit')
-        return revised, None
+        return textguard.restore(text, value.strip(), parts), None
     except (ProviderError, ValueError, TypeError, KeyError, IndexError) as e:
-        return text, f'Grammar correction skipped: {str(e)[:120]}'
+        return text, f'GRAMMAR_SKIPPED: {str(e)[:120]}'

@@ -11,7 +11,7 @@ import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from . import __version__, audio, devices, focus, inject, providers
+from . import __version__, audio, devices, focus, inject, postprocess, providers
 from .config import (AUDIO_DIR, DEFAULT, KEY_PATH, LAST_RAW_PATH, LATEST_PATH,
                      LOCK_PATH, LOG_PATH, MIC_PATH, ROOT_STATE, SERVICE_TOKEN_PATH,
                      STATE_PATH, _write_private, api_key, mic_node, read_config,
@@ -200,15 +200,15 @@ def worker(job_id: str):
         if quality['duration'] > config['max_record_seconds'] + 5:
             raise RuntimeError('Recording too long')
         suspected = False
+        # FR-017 / PRD §11.2: trim silence, then upload FLAC when possible.
+        # The retained WAV stays the source for retry.
+        try:
+            audio.trim_silence(file)
+        except (OSError, EOFError, ValueError) as exc:
+            logger.warning('trim_failed job=%s reason=%s', job_id, str(exc)[:120])
+        encoded = audio.encode_flac(file)
+        upload, mime = encoded if encoded else (file, 'audio/wav')
         if providers.service_configured(config):
-            # FR-017 / PRD §11.2: trim silence, then upload FLAC when possible.
-            # The retained WAV stays the source for retry.
-            try:
-                audio.trim_silence(file)
-            except (OSError, EOFError, ValueError) as exc:
-                logger.warning('trim_failed job=%s reason=%s', job_id, str(exc)[:120])
-            encoded = audio.encode_flac(file)
-            upload, mime = encoded if encoded else (file, 'audio/wav')
             try:
                 result = providers.service_dictation(upload, config, job_id=job_id, mime=mime)
             finally:
@@ -224,13 +224,20 @@ def worker(job_id: str):
                         billing.get('charged_audio_seconds'),
                         billing.get('remaining_seconds'))
         else:
-            raw = providers.transcribe(file, config)
+            terms = providers.direct_terms(config)
+            try:
+                asr = providers.transcribe_verbose(upload, config, mime=mime,
+                                                   prompt=postprocess.asr_prompt(terms))
+            finally:
+                if encoded:
+                    encoded[0].unlink(missing_ok=True)
+            raw = asr['text']
             # Do not pay for a grammar call if the user cancelled during ASR.
             if state().get('id') != job_id or state().get('phase') != 'processing':
                 logger.info('worker_cancelled_after_asr id=%s', job_id)
                 notify('Cancelled', 'Result was not applied')
                 return
-            edited, correction_warning = providers.correct(raw, config)
+            edited, correction_warning, suspected = direct_postprocess(asr, config, terms)
         # Only the latest uncancelled job may replace the recoverable result.
         with locked():
             fresh = state()
@@ -260,16 +267,47 @@ def worker(job_id: str):
         _recover_error(job_id, str(e), str(file))
 
 
+def direct_postprocess(asr: dict, config: dict, terms: list[str]) -> tuple[str, str | None, bool]:
+    """Same pipeline as the server (docs/05 §8.3) for direct developer mode:
+    hallucination check, dictation commands, grammar edit, script conversion."""
+    raw = asr['text']
+    warnings = []
+    suspected = postprocess.is_suspected_hallucination(raw, asr.get('segments'))
+    source = postprocess.apply_commands(raw) if config.get('dictation_commands', True) else raw
+    if suspected or config['mode'] == 'raw':
+        edited, warning = source, None
+    else:
+        edited, warning = providers.correct(source, config, terms)
+    if warning:
+        warnings.append(warning)
+    script = config.get('output_script') or ''
+    language = config.get('language')
+    if script and (language == 'zh' or (language == 'auto' and (
+            asr.get('language') in ('zh', 'chinese') or postprocess.looks_chinese(edited)))):
+        edited, converted = postprocess.convert_script(edited, script)
+        if not converted:
+            warnings.append('SCRIPT_CONVERSION_UNAVAILABLE: OpenCC is not installed')
+    return edited, '; '.join(warnings) or None, suspected
+
+
 OUTCOME_MESSAGES = {
+    'inserted': ('Inserted', ''),
     'dispatched_unverified': ('Complete', 'Paste dispatched (not verified)'),
     'clipboard_only': ('Copied', 'Text is on the clipboard; paste it where you need it'),
     'focus_changed': ('Not pasted', 'The window changed while processing; text copied instead'),
     'suspected_noise': ('No clear speech', 'Result kept for review; run `scribiva last`'),
+    'own_window': ('Copied', 'Start dictation with the shortcut while your text field is '
+                             'focused; the Scribiva window itself is never typed into'),
 }
 
 
 def deliver(text: str, config: dict, target: dict | None, suspected: bool) -> str:
-    """Choose paste vs copy (FR-005, FR-017, ADR-012). Returns the outcome."""
+    """Choose how the text reaches the target (FR-005, FR-017, ADR-012).
+
+    Order: the GNOME extension inserts in-compositor (input-method commit, or
+    its own clipboard + one paste); otherwise wl-copy + eitype. Unknown or
+    changed focus copies only. Returns the outcome.
+    """
     if suspected:
         # Possible phantom text: keep it in recovery only; do not touch the clipboard.
         return 'suspected_noise'
@@ -281,10 +319,26 @@ def deliver(text: str, config: dict, target: dict | None, suspected: bool) -> st
             return inject.dispatch(text, config['restore_text_clipboard'])
         inject.copy_text(text)
         return 'clipboard_only'
+    if focus.is_own_window(target):
+        inject.copy_text(text)
+        return 'own_window'
+    terminal = focus.is_terminal(target)
+    # Terminals: newlines would run commands, so they are collapsed to spaces
+    # and Enter is never sent; the user reviews the line and presses Enter.
+    via_extension = focus.insert_text(
+        text, target, single_line=terminal,
+        paste_shortcut='ctrl+shift+v' if terminal else 'ctrl+v',
+        restore_clipboard=config['restore_text_clipboard'])
+    if via_extension is not None:
+        if via_extension in focus.INSERTED:
+            return 'inserted' if via_extension == 'committed' else 'dispatched_unverified'
+        # Nothing was typed (focus moved, shell modal, busy): keep the text safe.
+        inject.copy_text(text)
+        return 'focus_changed' if via_extension in ('focus_changed', 'no_focus') else 'clipboard_only'
     if not focus.same_target(target, focus.snapshot()):
         inject.copy_text(text)
         return 'focus_changed'
-    if focus.is_terminal(target):
+    if terminal:
         inject.copy_text(text)
         return 'clipboard_only'
     return inject.dispatch(text, config['restore_text_clipboard'])

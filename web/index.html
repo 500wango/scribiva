@@ -217,7 +217,7 @@ async function refreshStatus(){
     const p=d.state.phase||'idle';
     $('state-title').textContent=names[p]||p;
     $('indicator').className='indicator '+p;
-    const outcomes={dispatched_unverified:'上次：已发送粘贴（无法确认目标应用已接收）',clipboard_only:'上次：已复制到剪贴板，请手动粘贴',focus_changed:'上次：处理期间窗口已切换，未粘贴，文字已复制',suspected_noise:'上次：未检测到清晰语音，结果未插入，可在下方查看'};
+    const outcomes={inserted:'上次：已输入到光标位置',own_window:'上次：焦点在 Scribiva 窗口上，文字已复制；请在目标输入框里按快捷键',dispatched_unverified:'上次：已发送粘贴（无法确认目标应用已接收）',clipboard_only:'上次：已复制到剪贴板，请手动粘贴',focus_changed:'上次：处理期间窗口已切换，未粘贴，文字已复制',suspected_noise:'上次：未检测到清晰语音，结果未插入，可在下方查看'};
     const last=p==='idle'&&d.state.last_result?outcomes[d.state.last_result]:'';
     $('state-meta').textContent=d.state.error || last || hints[p] || '检查日志';
     renderDoctor(d.doctor||{});

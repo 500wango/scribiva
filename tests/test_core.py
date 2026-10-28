@@ -48,7 +48,7 @@ class ProviderTests(unittest.TestCase):
         with patch.object(providers, '_request', return_value={'choices':[{'message':{'content':'Price 200.'}}]}):
             final, warning = providers.correct(original, {'mode':'standard', 'grammar_model':'openai/gpt-oss-20b'})
         self.assertEqual(final, original)
-        self.assertIn('skipped', warning)
+        self.assertIn('GRAMMAR_SKIPPED', warning)
 
     def test_403_cloudflare_does_not_retry(self):
         seen=[]

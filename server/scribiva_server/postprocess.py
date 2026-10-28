@@ -4,7 +4,10 @@
 - Whisper hallucinations on silence/noise are flagged (FR-017).
 - Chinese output script is normalised (FR-003) when OpenCC is installed.
 - Personal dictionary terms (FR-018) are validated and turned into an ASR prompt.
-"""
+
+
+Shared copy: the server package keeps an identical module so it can be
+deployed on its own. tests/test_shared_modules.py keeps the two in sync."""
 from __future__ import annotations
 import re
 import unicodedata

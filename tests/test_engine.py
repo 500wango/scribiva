@@ -55,6 +55,13 @@ class EngineJobTests(unittest.TestCase):
             # Focus is stable on an editor unless a test says otherwise.
             patch.object(engine.focus, 'snapshot', return_value=EDITOR),
             patch.object(engine.focus, 'set_indicator'),
+            # No v2 extension unless a test says so: client-side paste path.
+            patch.object(engine.focus, 'insert_text', return_value=None),
+            # Tests must never reach Groq with the developer's real key.
+            patch.object(engine.providers, '_request',
+                         side_effect=AssertionError('network call in test')),
+            patch.object(engine.providers, '_curl',
+                         side_effect=AssertionError('network call in test')),
             patch.object(engine.audio, 'encode_flac', return_value=None),
             patch.object(engine.audio, 'trim_silence', return_value={'trimmed': False}),
         ]
@@ -74,7 +81,7 @@ class EngineJobTests(unittest.TestCase):
         with patch.object(engine, 'read_config', return_value=CONFIG), \
              patch.object(engine.audio, 'quality',
                           return_value={'duration': 1.5, 'rms': 900.0}), \
-             patch.object(engine.providers, 'transcribe', return_value='原文内容'), \
+             patch.object(engine.providers, 'transcribe_verbose', return_value={'text': '原文内容', 'language': 'zh', 'segments': []}), \
              patch.object(engine.providers, 'correct',
                           return_value=('修正后的内容', 'Grammar correction skipped: timeout')), \
              patch.object(engine.inject, 'dispatch',
@@ -96,7 +103,7 @@ class EngineJobTests(unittest.TestCase):
         with patch.object(engine, 'read_config', return_value=service_config), \
              patch.object(engine.audio, 'quality',
                           return_value={'duration': 1.5, 'rms': 900.0}), \
-             patch.object(engine.providers, 'transcribe') as transcribe, \
+             patch.object(engine.providers, 'transcribe_verbose') as transcribe, \
              patch.object(engine.providers, 'correct') as correct, \
              patch.object(engine.providers, 'service_dictation',
                           return_value={'job_id': 'job_server_1',
@@ -165,17 +172,77 @@ class EngineJobTests(unittest.TestCase):
         copy.assert_not_called()
         self.assertEqual(engine.LATEST_PATH.read_text(encoding='utf-8'), '谢谢观看')
 
+    def test_extension_commit_is_preferred_and_skips_clipboard(self):
+        with patch.object(engine.focus, 'insert_text', return_value='committed') as ext:
+            state, copy, paste = self._run_service_job('jobx1', start_focus=EDITOR,
+                                                       end_focus=EDITOR)
+        self.assertEqual(state['last_result'], 'inserted')
+        ext.assert_called_once()
+        self.assertEqual(ext.call_args.args[:2], ('Edited.', EDITOR))
+        self.assertFalse(ext.call_args.kwargs['single_line'])
+        paste.assert_not_called()
+        copy.assert_not_called()
+
+    def test_extension_paste_fallback_is_unverified(self):
+        with patch.object(engine.focus, 'insert_text', return_value='pasted'):
+            state, copy, paste = self._run_service_job('jobx2', start_focus=EDITOR,
+                                                       end_focus=EDITOR)
+        self.assertEqual(state['last_result'], 'dispatched_unverified')
+        paste.assert_not_called()
+
+    def test_extension_reports_focus_change_and_text_is_copied(self):
+        with patch.object(engine.focus, 'insert_text', return_value='focus_changed'):
+            state, copy, paste = self._run_service_job('jobx3', start_focus=EDITOR,
+                                                       end_focus=EDITOR)
+        self.assertEqual(state['last_result'], 'focus_changed')
+        copy.assert_called_once_with('Edited.')
+        paste.assert_not_called()
+
+    def test_terminal_via_extension_is_single_line_with_terminal_paste(self):
+        with patch.object(engine.focus, 'insert_text', return_value='committed') as ext:
+            state, _, _ = self._run_service_job('jobx4', start_focus=TERMINAL,
+                                                end_focus=TERMINAL)
+        self.assertEqual(state['last_result'], 'inserted')
+        self.assertTrue(ext.call_args.kwargs['single_line'])
+        self.assertEqual(ext.call_args.kwargs['paste_shortcut'], 'ctrl+shift+v')
+
+    def test_own_window_is_never_typed_into(self):
+        own = {**EDITOR, 'app_id': 'Scribiva.desktop', 'wm_class': 'scribiva'}
+        with patch.object(engine.focus, 'insert_text') as ext:
+            state, copy, paste = self._run_service_job('jobx5', start_focus=own,
+                                                       end_focus=own)
+        self.assertEqual(state['last_result'], 'own_window')
+        ext.assert_not_called()
+        paste.assert_not_called()
+        copy.assert_called_once()
+
+    def test_direct_mode_runs_commands_terms_and_hallucination_check(self):
+        cfg = {**CONFIG, 'asr_prompt': 'Kubernetes, Scribiva'}
+        asr = {'text': '买菜 换行 做饭', 'language': 'zh', 'segments': []}
+        with patch.object(engine.providers, 'correct',
+                          return_value=('买菜\n做饭。', None)) as correct:
+            edited, warning, suspected = engine.direct_postprocess(asr, cfg,
+                                                                   ['Kubernetes', 'Scribiva'])
+        self.assertEqual(correct.call_args.args[0], '买菜\n做饭')
+        self.assertEqual(correct.call_args.args[2], ['Kubernetes', 'Scribiva'])
+        self.assertEqual((edited, warning, suspected), ('买菜\n做饭。', None, False))
+        with patch.object(engine.providers, 'correct') as correct:
+            _, _, suspected = engine.direct_postprocess(
+                {'text': '谢谢观看', 'language': 'zh', 'segments': []}, cfg, [])
+        self.assertTrue(suspected)
+        correct.assert_not_called()
+
     def test_cancel_during_asr_skips_grammar_and_result(self):
         path = self.recording()
 
         def cancelled(*_args, **_kwargs):
             engine.set_state({'phase': 'idle', 'last_job': 'job2'})
-            return '原文'
+            return {'text': '原文', 'language': 'zh', 'segments': []}
 
         engine.set_state({'phase': 'processing', 'id': 'job2', 'file': str(path)})
         with patch.object(engine, 'read_config', return_value=CONFIG), \
              patch.object(engine.audio, 'quality', return_value={'duration': 1.5, 'rms': 900.0}), \
-             patch.object(engine.providers, 'transcribe', side_effect=cancelled), \
+             patch.object(engine.providers, 'transcribe_verbose', side_effect=cancelled), \
              patch.object(engine.providers, 'correct') as correct, \
              patch.object(engine.inject, 'dispatch') as dispatch:
             engine.worker('job2')
@@ -194,7 +261,7 @@ class EngineJobTests(unittest.TestCase):
         engine.set_state({'phase': 'processing', 'id': 'job3', 'file': str(path)})
         with patch.object(engine, 'read_config', return_value=CONFIG), \
              patch.object(engine.audio, 'quality', return_value={'duration': 1.5, 'rms': 900.0}), \
-             patch.object(engine.providers, 'transcribe', return_value='原文'), \
+             patch.object(engine.providers, 'transcribe_verbose', return_value={'text': '原文', 'language': 'zh', 'segments': []}), \
              patch.object(engine.providers, 'correct', side_effect=corrected), \
              patch.object(engine.inject, 'dispatch') as dispatch:
             engine.worker('job3')
@@ -241,7 +308,7 @@ class EngineJobTests(unittest.TestCase):
         engine.set_state({'phase': 'processing', 'id': 'job9', 'file': str(path), 'focus': EDITOR})
         with patch.object(engine, 'read_config', return_value=CONFIG), \
              patch.object(engine.audio, 'quality', return_value={'duration': 1.5, 'rms': 900.0}), \
-             patch.object(engine.providers, 'transcribe', return_value='原文'), \
+             patch.object(engine.providers, 'transcribe_verbose', return_value={'text': '原文', 'language': 'zh', 'segments': []}), \
              patch.object(engine.providers, 'correct', return_value=('修正后', 'warn')), \
              patch.object(engine.inject, 'dispatch',
                           side_effect=RuntimeError('Paste dispatch failed/uncertain')):

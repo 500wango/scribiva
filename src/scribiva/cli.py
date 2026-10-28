@@ -119,7 +119,7 @@ def main(argv=None) -> int:
                    help='`service login`: paste an existing scr_ token instead of browser login')
     p = commands.add_parser('setup', help='Desktop integration: GNOME shortcut and extension')
     p.add_argument('action', nargs='?', default='status',
-                   choices=['status', 'hotkey', 'extension', 'all'])
+                   choices=['status', 'hotkey', 'extension', 'all', 'repair'])
     p.add_argument('--binding', default='<Primary><Alt>v',
                    help='GNOME accelerator for `setup hotkey` (default Ctrl+Alt+V)')
     p = commands.add_parser('dictionary', help='Show or replace the personal dictionary')
@@ -245,6 +245,8 @@ def main(argv=None) -> int:
         elif args.cmd == 'setup':
             from . import setup as desktop_setup
             result = {}
+            if args.action == 'repair':
+                result['repaired'] = desktop_setup.repair_hotkey()
             if args.action in ('hotkey', 'all'):
                 result['hotkey'] = desktop_setup.bind_hotkey(args.binding)
             if args.action in ('extension', 'all'):

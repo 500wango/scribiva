@@ -15,7 +15,7 @@ import subprocess
 SCHEMA = 'org.gnome.settings-daemon.plugins.media-keys'
 BASE = '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/'
 OUR_PATH = BASE + 'scribiva/'
-LEGACY_PATHS = (BASE + 'scribiva-alpha/',)
+LEGACY_PATHS = (BASE + 'scribiva-alpha/', BASE + 'scribiva-gate1/')
 EXTENSION_UUID = 'scribiva@scribiva.app'
 DEFAULT_BINDING = '<Primary><Alt>v'
 
@@ -46,6 +46,27 @@ def _unquote(value: str) -> str:
         return value
 
 
+def _is_scribiva(path: str, command: str) -> bool:
+    """Shortcuts created by any Scribiva version (incl. Gate/alpha scripts)."""
+    return path == OUR_PATH or path in LEGACY_PATHS or 'scribiva' in command.lower()
+
+
+def _command_target_exists(command: str) -> bool:
+    exe = command.strip().split()[0] if command.strip() else ''
+    exe = exe.strip('\'"')
+    return bool(exe) and (os.path.isfile(exe) and os.access(exe, os.X_OK)
+                          or bool(shutil.which(exe)))
+
+
+def _ours(paths: list[str]) -> list[tuple[str, str, str]]:
+    found = []
+    for path in paths:
+        command = _unquote(_gsettings('get', _item(path), 'command'))
+        if _is_scribiva(path, command):
+            found.append((path, command, _unquote(_gsettings('get', _item(path), 'binding'))))
+    return found
+
+
 def toggle_command() -> str:
     """Absolute command for the shortcut: the packaged binary if present."""
     for candidate in ('/usr/bin/scribiva-cli', os.path.expanduser('~/.local/bin/scribiva')):
@@ -61,14 +82,16 @@ def hotkey_status() -> dict:
     if not shutil.which('gsettings'):
         return {'available': False, 'installed': False}
     try:
-        paths = _paths()
-        if OUR_PATH not in paths:
-            return {'available': True, 'installed': False}
-        return {'available': True, 'installed': True,
-                'binding': _unquote(_gsettings('get', _item(OUR_PATH), 'binding')),
-                'command': _unquote(_gsettings('get', _item(OUR_PATH), 'command'))}
+        ours = _ours(_paths())
     except (OSError, subprocess.SubprocessError, ValueError, SyntaxError):
         return {'available': False, 'installed': False}
+    if not ours:
+        return {'available': True, 'installed': False}
+    path, command, binding = next((o for o in ours if o[0] == OUR_PATH), ours[0])
+    working = _command_target_exists(command) and path == OUR_PATH and len(ours) == 1
+    # "broken": a shortcut exists but runs a deleted script or an old copy.
+    return {'available': True, 'installed': working, 'broken': not working,
+            'binding': binding, 'command': command}
 
 
 def bind_hotkey(binding: str = DEFAULT_BINDING) -> dict:
@@ -78,8 +101,9 @@ def bind_hotkey(binding: str = DEFAULT_BINDING) -> dict:
                            'in your desktop settings')
     command = toggle_command()
     paths = _paths()
+    ours = {path for path, _, _ in _ours(paths)}
     for path in paths:
-        if path == OUR_PATH or path in LEGACY_PATHS:
+        if path in ours:
             continue
         if _unquote(_gsettings('get', _item(path), 'binding')) == binding:
             name = _unquote(_gsettings('get', _item(path), 'name'))
@@ -87,18 +111,29 @@ def bind_hotkey(binding: str = DEFAULT_BINDING) -> dict:
                                'choose another binding')
     for key, value in (('name', 'Scribiva'), ('command', command), ('binding', binding)):
         _gsettings('set', _item(OUR_PATH), key, value)
-    updated = [p for p in paths if p not in LEGACY_PATHS]
+    stale = ours - {OUR_PATH}
+    updated = [p for p in paths if p not in stale]
     if OUR_PATH not in updated:
         updated.append(OUR_PATH)
     if updated != paths:
         _gsettings('set', SCHEMA, 'custom-keybindings', repr(updated))
-    # A legacy Gate/alpha entry pointing at the old shim is cleared, not left dangling.
-    for legacy in LEGACY_PATHS:
-        if legacy in paths:
-            for key in ('name', 'command', 'binding'):
-                subprocess.run(['gsettings', 'reset', _item(legacy), key],
-                               capture_output=True, timeout=5, check=False)
-    return {'binding': binding, 'command': command}
+    # Older Scribiva entries (Gate scripts, source installs) are cleared so a
+    # single shortcut runs the current command.
+    for old in stale:
+        for key in ('name', 'command', 'binding'):
+            subprocess.run(['gsettings', 'reset', _item(old), key],
+                           capture_output=True, timeout=5, check=False)
+    return {'binding': binding, 'command': command, 'replaced': sorted(stale)}
+
+
+def repair_hotkey() -> dict | None:
+    """Point an existing but broken Scribiva shortcut at the current command,
+    keeping the user's key combination. Does nothing when none exists (the
+    user has not opted in) or when it already works."""
+    status = hotkey_status()
+    if not status.get('broken'):
+        return None
+    return bind_hotkey(status.get('binding') or DEFAULT_BINDING)
 
 
 def _string_list(schema: str, key: str) -> list[str]:

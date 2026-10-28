@@ -3,7 +3,10 @@
 The transcript is untrusted input, not an instruction. URLs, code, paths,
 emails, numbers and Markdown markers are masked before the model sees the text
 and verified afterwards; any mismatch fails closed to the raw transcript.
-"""
+
+
+Shared copy: the server package keeps an identical module so it can be
+deployed on its own. tests/test_shared_modules.py keeps the two in sync."""
 from __future__ import annotations
 import re
 

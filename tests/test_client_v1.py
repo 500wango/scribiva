@@ -67,6 +67,42 @@ class FocusTests(unittest.TestCase):
             self.assertIsNone(focus.snapshot())
 
 
+class InsertTextTests(unittest.TestCase):
+    TARGET = {'source': 'gnome-extension', 'app_id': 'md.obsidian.desktop',
+              'wm_class': 'obsidian', 'window_id': 5000000001, 'pid': 1}
+
+    def test_busctl_call_shape_and_result(self):
+        calls = []
+
+        def fake_run(cmd, timeout=1.5):
+            calls.append(cmd)
+            if 'get-property' in cmd:
+                return '{"type":"s","data":"2"}'
+            return '{"type":"s","data":["committed"]}'
+        with patch.object(focus, '_run', side_effect=fake_run), \
+             patch.object(focus.shutil, 'which', return_value='/usr/bin/busctl'):
+            out = focus.insert_text('- 第一项\n"引号" $(x)', self.TARGET, single_line=True,
+                                    paste_shortcut='ctrl+shift+v')
+        self.assertEqual(out, 'committed')
+        cmd = calls[-1]
+        self.assertIn('--', cmd)
+        i = cmd.index('InsertText')
+        self.assertEqual(cmd[i + 1:i + 4], ['sta{sv}', '- 第一项\n"引号" $(x)', '5000000001'])
+        self.assertEqual(cmd[i + 4:], ['3', 'single_line', 'b', 'true', 'paste_shortcut', 's',
+                                       'ctrl+shift+v', 'restore_clipboard', 'b', 'true'])
+
+    def test_old_extension_or_other_source_falls_back(self):
+        with patch.object(focus, '_run', return_value='{"type":"s","data":"1"}'), \
+             patch.object(focus.shutil, 'which', return_value='/usr/bin/busctl'):
+            self.assertIsNone(focus.insert_text('x', self.TARGET))
+        self.assertIsNone(focus.insert_text('x', {**self.TARGET, 'source': 'x11'}))
+        self.assertIsNone(focus.insert_text('x', None))
+
+    def test_own_window_detection(self):
+        self.assertTrue(focus.is_own_window({'app_id': 'Scribiva.desktop', 'wm_class': ''}))
+        self.assertFalse(focus.is_own_window(self.TARGET))
+
+
 class AudioTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

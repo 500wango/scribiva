@@ -8,6 +8,7 @@ Otherwise the focus is ``None`` (unknown), and the caller copies instead of
 pasting. Window titles are never read.
 """
 from __future__ import annotations
+import json
 import os
 import re
 import shutil
@@ -95,11 +96,64 @@ def same_target(before: dict | None, after: dict | None) -> bool:
             and before.get('app_id') == after.get('app_id'))
 
 
+def is_own_window(target: dict | None) -> bool:
+    """Scribiva's own window: clicking its record button focuses it, and the
+    result must not be typed back into Scribiva itself."""
+    if not target:
+        return False
+    ids = ((target.get('app_id') or '') + ' ' + (target.get('wm_class') or '')).lower()
+    return 'scribiva' in ids
+
+
 def is_terminal(target: dict | None) -> bool:
     if not target:
         return False
     return bool(_TERMINAL_RE.search(target.get('app_id') or '')
                 or _TERMINAL_RE.search(target.get('wm_class') or ''))
+
+
+def extension_version() -> int:
+    """Interface version of the running GNOME extension, 0 when unavailable."""
+    if not shutil.which('busctl'):
+        return 0
+    out = _run(['busctl', '--user', '--json=short', 'get-property', DBUS_DEST, DBUS_PATH,
+                DBUS_IFACE, 'Version'])
+    try:
+        return int(json.loads(out)['data']) if out else 0
+    except (ValueError, KeyError, TypeError):
+        return 0
+
+
+# Outcomes of InsertText. "committed" (input method) and "pasted" mean the
+# text was sent to the remembered window; the others mean nothing was typed.
+INSERTED = {'committed', 'pasted'}
+
+
+def insert_text(text: str, target: dict, *, single_line: bool = False,
+                paste_shortcut: str = 'ctrl+v', restore_clipboard: bool = True,
+                timeout: float = 6.0) -> str | None:
+    """Type ``text`` into ``target`` through the GNOME extension (v2+).
+
+    The extension re-checks inside the compositor that ``target`` is still the
+    focused window and commits through the input method, falling back to
+    clipboard + one paste chord. Returns the outcome string, or None when the
+    extension cannot be used (caller falls back to the client-side paste).
+    """
+    if not target or target.get('source') != 'gnome-extension' or not shutil.which('busctl'):
+        return None
+    if extension_version() < 2:
+        return None
+    args = ['busctl', '--user', '--json=short', '--timeout=' + str(int(timeout)), '--',
+            'call', DBUS_DEST, DBUS_PATH, DBUS_IFACE, 'InsertText', 'sta{sv}',
+            text, str(int(target['window_id'])), '3',
+            'single_line', 'b', 'true' if single_line else 'false',
+            'paste_shortcut', 's', paste_shortcut,
+            'restore_clipboard', 'b', 'true' if restore_clipboard else 'false']
+    out = _run(args, timeout=timeout + 1)
+    try:
+        return str(json.loads(out)['data'][0]) if out else None
+    except (ValueError, KeyError, IndexError, TypeError):
+        return None
 
 
 def set_indicator(phase: str) -> None:

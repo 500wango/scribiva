@@ -77,6 +77,29 @@ class SetupTests(unittest.TestCase):
         self.assertIn('Something else', str(ctx.exception))
         self.assertEqual(ast.literal_eval(store[(setup.SCHEMA, 'custom-keybindings')]), [other])
 
+    def test_repair_replaces_broken_gate_shortcut_keeping_binding(self):
+        gate = setup.BASE + 'scribiva-gate1/'
+        store = {
+            (setup.SCHEMA, 'custom-keybindings'): repr([gate]),
+            (item(gate), 'name'): "'Scribiva Test'",
+            (item(gate), 'command'): "'/home/u/.local/bin/scribiva-insert-test'",
+            (item(gate), 'binding'): "'<Primary><Alt>v'",
+        }
+        with patch.object(setup, '_command_target_exists', return_value=False):
+            result = self.run_with(store, setup.repair_hotkey)
+        self.assertEqual(result['binding'], '<Primary><Alt>v')
+        self.assertEqual(result['replaced'], [gate])
+        self.assertEqual(ast.literal_eval(store[(setup.SCHEMA, 'custom-keybindings')]),
+                         [setup.OUR_PATH])
+        self.assertNotIn((item(gate), 'command'), store)
+
+    def test_repair_does_nothing_without_a_scribiva_shortcut(self):
+        other = setup.BASE + 'custom0/'
+        store = {(setup.SCHEMA, 'custom-keybindings'): repr([other]),
+                 (item(other), 'command'): "'gnome-terminal'"}
+        self.assertIsNone(self.run_with(store, setup.repair_hotkey))
+        self.assertEqual(ast.literal_eval(store[(setup.SCHEMA, 'custom-keybindings')]), [other])
+
     def test_enable_extension_persists_choice_and_asks_for_relogin(self):
         store = {('org.gnome.shell', 'enabled-extensions'): "['ubuntu-dock@ubuntu.com']",
                  ('org.gnome.shell', 'disabled-extensions'): "['scribiva@scribiva.app']"}

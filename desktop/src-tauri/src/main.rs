@@ -52,6 +52,7 @@ fn main() {
         ])
         .setup(|app| {
             use tauri::Manager;
+            std::thread::spawn(linux::repair_hotkey);
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.show();
             }
