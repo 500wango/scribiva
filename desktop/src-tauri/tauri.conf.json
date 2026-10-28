@@ -1,0 +1,9 @@
+{
+ "$schema": "https://schema.tauri.app/config/2",
+ "productName": "Scribiva",
+ "version": "0.2.0-alpha.1",
+ "identifier": "app.scribiva.desktop",
+ "build": {"beforeDevCommand":"npm run dev","devUrl":"http://127.0.0.1:1420","beforeBuildCommand":"npm run build","frontendDist":"../dist"},
+ "app": {"windows":[{"title":"Scribiva · Voice typing","label":"main","width":1000,"height":720,"minWidth":680,"minHeight":550,"backgroundColor":"#0d121b"}], "security":{"csp":"default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'"}},
+ "bundle": {"active":false}
+}

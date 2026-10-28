@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <title>Scribiva · Dictation Console</title>
+  <style>
+    :root { --bg:#0d121b; --panel:#151d29; --panel2:#1b2532; --line:#2a3645; --muted:#98a7b9; --text:#eef4fb; --accent:#8fc5ff; --good:#79dfb5; --warn:#f1c887; --bad:#f5a3a8; }
+    * { box-sizing: border-box }
+    body { margin:0; background:radial-gradient(circle at 12% 0,#19283a 0,transparent 38%),var(--bg); color:var(--text); font:14px/1.55 Inter,ui-sans-serif,system-ui,-apple-system,'Noto Sans CJK SC',sans-serif }
+    .wrap { width:min(1040px,calc(100% - 44px)); margin:0 auto; padding:35px 0 56px }
+    header { display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line); padding-bottom:23px; gap:20px }
+    .brand { display:flex; align-items:center; gap:14px }
+    .logo { display:grid; place-items:center; width:46px; height:46px; background:linear-gradient(140deg,#a4d1ff,#6ba6d9); color:#0b1d2d; border-radius:14px; font-size:27px; font-weight:800; box-shadow:0 10px 35px #0005 }
+    .brand-title { font-size:23px; font-weight:700; letter-spacing:-.7px }
+    .eyebrow { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:1.8px }
+    .tag { padding:6px 10px; border:1px solid #456451; border-radius:99px; background:#183127; color:#92e8b7; font-size:11px; letter-spacing:.4px; white-space:nowrap }
+    h1 { font-size:38px; font-weight:700; line-height:1.18; letter-spacing:-1.4px; margin:36px 0 8px }
+    .lead { color:var(--muted); margin:0 0 29px }
+    .layout { display:grid; grid-template-columns:1.05fr .95fr; gap:16px; align-items:start }
+    .card { background:linear-gradient(170deg,#1a2532,#141c27); border:1px solid var(--line); border-radius:17px; padding:24px; box-shadow:0 16px 55px #0001 }
+    .card h2 { font-size:15px; margin:0 0 15px; letter-spacing:.1px }
+    .sub { font-size:12px; color:var(--muted); margin:0 0 18px }
+    .status { display:flex; gap:12px; align-items:center; margin:19px 0 26px }
+    .indicator { width:12px; height:12px; border-radius:50%; background:#6e7a87; box-shadow:0 0 0 6px #75879b18; flex:0 0 auto }
+    .indicator.recording { background:#f7a5a0; box-shadow:0 0 0 6px #dc686522 }
+    .indicator.processing,.indicator.injecting { background:#f1c887; box-shadow:0 0 0 6px #d9ac5425 }
+    .indicator.idle { background:#79dfb5; box-shadow:0 0 0 6px #79dfb51b }
+    .indicator.error { background:#f18a91; box-shadow:0 0 0 6px #dc686530 }
+    .status-title { font-size:24px; font-weight:680; letter-spacing:-.7px }
+    .status-meta { font-size:12px; color:var(--muted); word-break:break-word }
+    .actions { display:flex; gap:10px; flex-wrap:wrap }
+    .btn { cursor:pointer; border:1px solid #6488a9; border-radius:10px; padding:11px 16px; color:#0d1a28; background:#a2cbf5; font:inherit; font-weight:650; text-decoration:none; display:inline-block }
+    .btn:hover { filter:brightness(1.1) }
+    .btn:disabled { opacity:.45; cursor:not-allowed; filter:none }
+    .btn:focus-visible, select:focus-visible, input:focus-visible { outline:2px solid #bfe0ff; outline-offset:2px }
+    .btn.secondary { background:#273646; border-color:#405267; color:#e5effa }
+    .btn.danger { background:#36262b; border-color:#61444d; color:#f5b8bd }
+    .btn.small { padding:7px 11px; font-size:12px }
+    .short { margin:24px 0 0; border-top:1px solid var(--line); padding-top:18px; color:var(--muted); font-size:12px }
+    .tips { margin:14px 0 0; padding:0 0 0 18px; color:#aebfd2; font-size:12px; line-height:1.65 }
+    .tips li { margin:7px 0 }
+    .kbd { display:inline-block; color:#dbe9f8; border:1px solid #536174; padding:2px 7px; border-radius:5px; margin:0 3px }
+    .field { margin-bottom:16px }
+    .field label { display:block; font-size:12px; margin-bottom:6px; color:#b8c8d9 }
+    select,input[type=number],input[type=url] { border-radius:9px; border:1px solid #3d4e61; width:100%; padding:11px 12px; background:#111a25; color:#edf5ff; outline:0; font:inherit }
+    .meter { height:8px; background:#101823; border:1px solid var(--line); border-radius:99px; overflow:hidden; margin:8px 0 10px }
+    .meter span { display:block; height:100%; width:0; background:linear-gradient(90deg,#79dfb5,#8fc5ff); transition:width .3s }
+    .service-stats { font-size:12px; color:var(--muted); margin:0 0 14px; word-break:break-word }
+    #service-link[hidden] { display:none }
+    #service-plan { flex:0 1 200px }
+    #service-card .inline { justify-content:flex-start }
+    select:focus,input:focus { border-color:#90c3fb }
+    .inline { display:flex; gap:8px; align-items:center }
+    .inline select { flex:1 1 auto; min-width:0 }
+    .inline .btn { flex:0 0 auto; white-space:nowrap }
+    .check { display:flex; gap:9px; align-items:center; margin:13px 0; color:#d0dae5; font-size:13px }
+    .check input { width:auto; accent-color:#91bdf3 }
+    .row { display:flex; justify-content:space-between; align-items:center; gap:20px; flex-wrap:wrap }
+    .full { grid-column:1/-1 }
+    .mono { font-family:ui-monospace,SFMono-Regular,monospace; font-size:12px }
+    .note { font-size:12px; color:var(--muted); margin-top:8px; word-break:break-word }
+    .alert { color:var(--warn); font-size:12px; min-height:18px; word-break:break-word }
+    .privacy { border-left:3px solid #789fbd; background:#1b2735; padding:13px 16px; border-radius:0 9px 9px 0; font-size:12px; color:#c1d2e4 }
+    .checks { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:8px; margin:6px 0 16px }
+    .check-item { border:1px solid var(--line); border-radius:9px; padding:9px 11px; font-size:12px; background:#111a25 }
+    .check-item b { display:flex; justify-content:space-between; gap:8px; font-weight:600; margin-bottom:3px }
+    .check-item span { color:var(--muted); word-break:break-word }
+    .dot { font-size:11px; letter-spacing:.4px }
+    .dot.ok { color:var(--good) } .dot.warn { color:var(--warn) } .dot.fail { color:var(--bad) }
+    .last { white-space:pre-wrap; word-break:break-word; background:#101823; border:1px solid var(--line); border-radius:11px; padding:14px; max-height:240px; overflow:auto; margin:12px 0; min-height:58px; font-family:inherit }
+    .empty { color:var(--muted) }
+    details { margin-top:10px } summary { cursor:pointer; color:#b8c8d9; font-size:12px } details .mono { margin-top:8px; white-space:pre-wrap; color:var(--muted) }
+    @media(max-width:760px){ .layout{grid-template-columns:1fr} .wrap{width:calc(100% - 28px)} h1{font-size:30px} .card{padding:20px} }
+    @media(max-width:560px){ #service-card .inline{flex-wrap:wrap} #service-plan{flex:1 1 100%} #service-card .inline .btn{flex:1 1 auto; text-align:center} }
+  </style>
+</head>
+<body><div class="wrap">
+<header>
+  <div class="brand"><div class="logo">S.</div><div><div class="brand-title">scribiva.</div><div class="eyebrow">Voice-first writing</div></div></div>
+  <div class="tag">LINUX · DEVELOPER ALPHA</div>
+</header>
+<h1>Speak naturally.<br/>Write seamlessly.</h1>
+<p class="lead">跨应用语音输入 · Obsidian 兼容 · 20 种语言 · 智能语法修正</p>
+
+<div class="layout">
+  <section class="card">
+    <h2>录音控制</h2>
+    <p class="sub">全局快捷键触发；也可以从此控制台开始、停止、取消或丢弃。</p>
+    <div class="status" aria-live="polite">
+      <div id="indicator" class="indicator"></div>
+      <div><div id="state-title" class="status-title">载入中</div><div id="state-meta" class="status-meta">连接本地录音服务…</div></div>
+    </div>
+    <div class="actions">
+      <button class="btn" id="toggle">开始 / 结束录音</button>
+      <button class="btn secondary" id="retry">重试失败录音</button>
+      <button class="btn danger" id="discard">丢弃</button>
+      <button class="btn secondary" id="cancel">取消</button>
+    </div>
+    <p class="alert" id="action-msg" aria-live="polite"></p>
+    <p class="short">GNOME Wayland 快捷键 <span class="kbd">Ctrl</span> + <span class="kbd">Alt</span> + <span class="kbd">V</span></p>
+    <ul class="tips">
+      <li>录音与处理期间保持目标编辑器焦点，切换窗口可能改变插入位置。</li>
+      <li>“已派发”不等于目标应用已确认接收；失败时文本仍保留在剪贴板和本机结果中。</li>
+      <li>“丢弃”删除失败录音；“清除本地结果”只删除转写文本。</li>
+    </ul>
+  </section>
+
+  <section class="card">
+    <h2>识别与文字处理</h2>
+    <div class="field"><label for="language">听写语言</label><select id="language"></select></div>
+    <div class="field"><label for="mode">AI 文本处理</label><select id="mode"><option value="raw">原文 · 只转写</option><option value="standard">智能修正 · 推荐</option><option value="polished">流畅表达 · 适度润色</option></select></div>
+    <div class="field"><label for="asr_model">语音识别模型</label><select id="asr_model"><option value="whisper-large-v3">Whisper Large V3 · 准确优先</option><option value="whisper-large-v3-turbo">Whisper Large V3 Turbo · 速度优先</option></select></div>
+    <div class="field">
+      <label for="mic_node">麦克风（PipeWire node.name）</label>
+      <div class="inline"><select id="mic_node"></select><button class="btn secondary small" id="refresh-devices" type="button">刷新</button></div>
+      <p class="note" id="mic-note">·</p>
+    </div>
+    <div class="field"><label for="max_record_seconds">最长录音时长（5–600 秒）</label><input id="max_record_seconds" type="number" min="5" max="600" step="5" /></div>
+    <div class="field">
+      <label for="service_url">订阅服务地址（留空使用本机 Groq Key）</label>
+      <input id="service_url" type="url" placeholder="https://api.example.com" autocomplete="off" />
+      <p class="note" id="service-note">·</p>
+    </div>
+    <label class="check"><input type="checkbox" id="auto_insert" /> 识别完成后自动粘贴到光标处</label>
+    <label class="check"><input type="checkbox" id="restore_text_clipboard" /> 尝试恢复原有纯文本剪贴板</label>
+    <label class="check"><input type="checkbox" id="delete_audio_on_success" /> 成功后删除本地录音；失败时保留以便重试</label>
+    <button class="btn secondary" id="save">保存设置</button>
+    <p id="save-msg" class="alert" aria-live="polite"></p>
+  </section>
+
+  <section class="card full">
+    <div class="row"><h2>最近一次结果</h2><div class="actions"><button class="btn secondary small" id="copy-last">复制最终文本</button><button class="btn secondary small" id="toggle-raw">查看 ASR 原文</button><button class="btn danger small" id="clear-last">清除本地结果</button></div></div>
+    <p class="note" id="last-note">最近结果仅保存在本机，默认只保留一次。</p>
+    <div class="last" id="last-text"><span class="empty">尚无结果</span></div>
+    <p class="alert" id="last-warning" aria-live="polite"></p>
+  </section>
+
+  <section class="card full" id="service-card">
+    <div class="row"><h2>订阅与额度</h2><button class="btn secondary small" id="service-refresh">刷新额度</button></div>
+    <p class="sub" id="service-summary">读取中…</p>
+    <div class="meter" aria-hidden="true"><span id="service-bar"></span></div>
+    <p class="service-stats" id="service-stats"></p>
+    <p class="alert" id="service-msg" aria-live="polite"></p>
+    <div class="inline">
+      <select id="service-plan" aria-label="订阅计划">
+        <option value="monthly">月付计划</option>
+        <option value="annual">年付计划</option>
+      </select>
+      <button class="btn" id="service-checkout" type="button">升级 / 续订</button>
+      <button class="btn secondary" id="service-portal" type="button">管理订阅</button>
+      <a class="btn secondary" id="service-link" target="_blank" rel="noopener noreferrer" hidden>打开 Stripe 页面</a>
+    </div>
+    <p class="note" id="service-quota-note">·</p>
+    <p class="note">订阅权益只在服务端收到并通过签名校验的 Stripe Webhook 后生效；页面跳转成功不代表已付款。服务端持有 Groq Key，本机只保存服务令牌。</p>
+  </section>
+
+  <section class="card full">
+    <div class="row"><h2>环境与诊断</h2><button class="btn secondary small" id="refresh">刷新状态</button></div>
+    <div class="checks" id="checks"><div class="check-item"><span>检查中…</span></div></div>
+    <div class="mono" id="device-summary">·</div>
+    <details><summary>原始诊断 JSON</summary><div class="mono" id="doctor-json">·</div></details>
+    <p class="note">错误日志：~/.local/state/scribiva/scribiva.log</p>
+    <div class="privacy">直接模式会把录音发送给 Groq，密钥仅保存在本机 0600 文件。配置“订阅服务地址”后，请求改为发送到自建 Scribiva API：服务端持有 Groq Key、执行账户鉴权、额度预留与账单幂等；本机只需保存服务令牌。Checkout/Portal 入口已接入；上线仍需正式 Stripe 账户、价格与 Webhook 配置。</div>
+  </section>
+</div>
+</div>
+<script>
+const TOKEN='__CSRF_TOKEN__';
+const $=(id)=>document.getElementById(id);
+const names={idle:'待命',recording:'录音中',processing:'正在识别',injecting:'正在输入',error:'需要处理'};
+const hints={idle:'准备就绪 · 按快捷键即可开始',recording:'录音中；再次触发快捷键结束',processing:'音频正在云端处理',injecting:'正在向当前窗口发送粘贴命令',error:'检查诊断与日志'};
+const api=async(path,body)=>{
+  const options=body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-Scribiva-Token':TOKEN},body:JSON.stringify(body)};
+  const res=await fetch(path,options); let data={}; try{data=await res.json()}catch(_){ }
+  if(!res.ok) throw new Error(data.error||('HTTP '+res.status));
+  return data;
+};
+let lastData={available:false,text:'',raw:''};
+let lastSignature='';
+let showRaw=false;
+let settings={language:'auto',mode:'standard',asr_model:'whisper-large-v3',auto_insert:true,restore_text_clipboard:true,delete_audio_on_success:true,mic_node:'',max_record_seconds:180,service_url:''};
+
+function renderChecks(checks){
+  const root=$('checks'); root.textContent='';
+  if(!Array.isArray(checks)||!checks.length){const d=document.createElement('div');d.className='check-item';d.textContent='没有诊断数据';root.append(d);return}
+  for(const c of checks){
+    const item=document.createElement('div'); item.className='check-item';
+    const head=document.createElement('b');
+    const name=document.createElement('span'); name.textContent=String(c.id||'');
+    const badge=document.createElement('span'); badge.className='dot '+(c.status||'warn'); badge.textContent=String(c.status||'?').toUpperCase();
+    head.append(name,badge);
+    const detail=document.createElement('span'); detail.textContent=String(c.detail||'');
+    item.append(head,detail); root.append(item);
+  }
+}
+function renderDoctor(doc){
+  renderChecks(doc.checks);
+  const dev=(doc.devices||[]).map(d=>d.label+' ['+d.node+']'+(d.virtual?' · 虚拟':'')+(d.default?' · 默认':'')).join('\n');
+  $('device-summary').textContent=
+    '版本: '+(doc.version||'-')+'\n'+
+    '会话: '+(doc.session||'-')+' / '+(doc.desktop||'-')+'\n'+
+    '当前麦克风: '+(doc.mic_node||'未配置')+'\n'+
+    '系统默认: '+(doc.default_source||'未检测到')+'\n'+
+    (doc.device_error?('设备扫描: '+doc.device_error+'\n'):'')+
+    (dev?('\n可用输入:\n'+dev):'');
+  $('doctor-json').textContent=JSON.stringify(doc,null,2);
+}
+async function refreshStatus(){
+  try{
+    const d=await api('/api/status');
+    const p=d.state.phase||'idle';
+    $('state-title').textContent=names[p]||p;
+    $('indicator').className='indicator '+p;
+    $('state-meta').textContent=d.state.error || hints[p] || '检查日志';
+    renderDoctor(d.doctor||{});
+  }catch(e){ $('state-meta').textContent=e.message; }
+}
+function renderLast(){
+  const el=$('last-text');
+  const text=showRaw?(lastData.raw||''):(lastData.text||'');
+  if(!lastData.available){ el.textContent='尚无结果'; el.classList.add('empty'); }
+  else if(!text){ el.textContent=showRaw?'没有保存 ASR 原文':'没有保存修正后文本'; el.classList.add('empty'); }
+  else { el.textContent=text; el.classList.remove('empty'); }
+  $('last-warning').textContent=lastData.warning||'';
+  $('last-note').textContent='最近结果仅保存在本机 · '+(lastData.last_job?('任务 '+lastData.last_job+' · '):'')+'状态 '+(lastData.phase||'-');
+  $('toggle-raw').textContent=showRaw?'查看修正后文本':'查看 ASR 原文';
+  $('toggle-raw').disabled=!lastData.available;
+  $('copy-last').disabled=!lastData.text;
+  $('clear-last').disabled=!lastData.available;
+}
+async function loadLast(){
+  try{
+    const data=await api('/api/last');
+    const signature=JSON.stringify(data);
+    if(signature===lastSignature) return;
+    lastSignature=signature; lastData=data; renderLast();
+  }catch(e){ $('last-warning').textContent=e.message; }
+}
+function fillSelect(id,entries,value){
+  const el=$(id); el.textContent='';
+  for(const [val,label] of entries){ const o=document.createElement('option'); o.value=val; o.textContent=label; el.append(o); }
+  if(value!==undefined && !entries.some(([v])=>v===value)){ const o=document.createElement('option'); o.value=value; o.textContent=value+'（当前配置，未检测到）'; el.append(o); }
+  if(value!==undefined) el.value=value;
+}
+async function loadDevices(){
+  try{
+    const d=await api('/api/devices');
+    const entries=[['','自动 · 使用系统默认'+(d.default?('（'+d.default+'）'):'')]];
+    for(const dev of (d.devices||[])){
+      entries.push([dev.node, dev.label+(dev.virtual?' · 虚拟':'')+(dev.default?' · 默认':'')]);
+    }
+    fillSelect('mic_node',entries,settings.mic_node||'');
+    const active=d.active||'未配置';
+    $('mic-note').textContent='当前生效: '+active+(d.configured?(' · 已保存选择: '+d.configured):'')+(d.error?(' · 扫描警告: '+d.error):'');
+  }catch(e){ $('mic-note').textContent='设备读取失败: '+e.message; }
+}
+async function loadSettings(){
+  const data=await api('/api/config');
+  settings={...settings,...data.settings};
+  fillSelect('language',Object.entries(data.languages),settings.language);
+  fillSelect('mode',[['raw','原文 · 只转写'],['standard','智能修正 · 推荐'],['polished','流畅表达 · 适度润色']],settings.mode);
+  fillSelect('asr_model',[['whisper-large-v3','Whisper Large V3 · 准确优先'],['whisper-large-v3-turbo','Whisper Large V3 Turbo · 速度优先']],settings.asr_model);
+  $('max_record_seconds').value=settings.max_record_seconds;
+  $('service_url').value=settings.service_url||'';
+  $('service-note').textContent=settings.service_url
+    ? ('服务模式 · 令牌'+(data.service_token_present?'已配置':'未配置，请运行 scribiva service login'))
+    : '直接模式 · 使用本机 Groq Key';
+  $('auto_insert').checked=!!settings.auto_insert;
+  $('restore_text_clipboard').checked=!!settings.restore_text_clipboard;
+  $('delete_audio_on_success').checked=!!settings.delete_audio_on_success;
+  await loadDevices();
+}
+let serviceSignature='';
+function serviceControls(enabled){
+  for(const id of ['service-plan','service-checkout','service-portal']) $(id).disabled=!enabled;
+}
+function renderService(data){
+  const signature=JSON.stringify(data);
+  if(signature===serviceSignature) return;
+  serviceSignature=signature;
+  const summary=$('service-summary');
+  const link=$('service-link');
+  link.hidden=true;
+  if(!data.configured){
+    serviceControls(false);
+    summary.textContent='直接模式：使用本机 Groq Key，没有服务端额度。';
+    $('service-stats').textContent='';
+    $('service-quota-note').textContent='填写“订阅服务地址”，或运行 scribiva service login --url https://…';
+    $('service-bar').style.width='0%';
+    $('service-msg').textContent=data.error||'';
+    return;
+  }
+  serviceControls(true);
+  if(data.error){
+    summary.textContent='服务已配置，但无法读取额度。';
+    $('service-stats').textContent=data.service_url||'';
+    $('service-quota-note').textContent='检查服务地址、网络与服务令牌。';
+    $('service-msg').textContent=data.error;
+    $('service-bar').style.width='0%';
+    return;
+  }
+  const account=data.account||{};
+  const usage=account.usage||{};
+  const server=data.server||{};
+  const features=server.features||{};
+  const used=Number(usage.used_seconds||0);
+  const limit=Number(usage.limit_seconds||0);
+  summary.textContent='计划 '+(account.plan||'unknown')+' · 本期已用 '+used+'s'+(limit?(' / '+limit+'s'):'');
+  $('service-stats').textContent='剩余 '+(usage.remaining_seconds===undefined?'?':usage.remaining_seconds)+'s · 处理中预留 '+(usage.reserved_seconds||0)+'s · 服务版本 '+(server.server_version||'-')+' · Stripe '+(features.billing?'已配置':'未配置');
+  $('service-bar').style.width=(limit>0?Math.min(100,Math.round(used/limit*100)):0)+'%';
+  $('service-quota-note').textContent=(data.service_url||'')+' · 服务令牌只保存在本机 0600 文件';
+  $('service-msg').textContent='';
+}
+async function loadService(){
+  try{ renderService(await api('/api/service')); }
+  catch(e){
+    serviceControls(false);
+    $('service-summary').textContent='无法读取本地控制台状态。';
+    $('service-msg').textContent=e.message;
+  }
+}
+async function serviceAction(name){
+  const msg=$('service-msg');
+  const link=$('service-link');
+  msg.textContent=''; link.hidden=true;
+  try{
+    const body=name==='checkout'?{plan:$('service-plan').value}:{};
+    const data=await api('/api/service/'+name,body);
+    link.href=data.url; link.hidden=false;
+    msg.textContent=name==='checkout'
+      ? 'Checkout 会话已创建；请打开新页面完成付款。'
+      : 'Portal 会话已创建；请打开新页面管理或取消订阅。';
+  }catch(e){ msg.textContent=e.message; }
+}
+async function action(name,label){
+  $('action-msg').textContent='';
+  try{ await api('/api/'+name,{}); $('action-msg').textContent=label||''; setTimeout(refreshStatus,180); setTimeout(loadLast,900); }
+  catch(e){ $('action-msg').textContent=e.message; }
+}
+$('toggle').onclick=()=>action('toggle');
+$('cancel').onclick=()=>action('cancel');
+$('retry').onclick=()=>action('retry');
+$('discard').onclick=()=>{ if(confirm('丢弃将删除保留的失败录音或取消待插入结果。继续？')) action('discard'); };
+$('refresh').onclick=refreshStatus;
+$('refresh-devices').onclick=loadDevices;
+$('service-refresh').onclick=loadService;
+$('service-checkout').onclick=()=>serviceAction('checkout');
+$('service-portal').onclick=()=>serviceAction('portal');
+$('toggle-raw').onclick=()=>{ showRaw=!showRaw; renderLast(); };
+$('copy-last').onclick=()=>action('copy-last','已复制到剪贴板');
+$('clear-last').onclick=()=>{ if(confirm('清除本机保存的最近一次转写？')) action('clear-last','本地结果已清除').then(loadLast); };
+$('save').onclick=async()=>{
+  $('save-msg').textContent='';
+  const body={language:$('language').value,mode:$('mode').value,asr_model:$('asr_model').value,mic_node:$('mic_node').value,
+    max_record_seconds:Number($('max_record_seconds').value),auto_insert:$('auto_insert').checked,
+    restore_text_clipboard:$('restore_text_clipboard').checked,delete_audio_on_success:$('delete_audio_on_success').checked,
+    service_url:$('service_url').value.trim()};
+  try{ await api('/api/settings',body); settings={...settings,...body}; $('save-msg').textContent='设置已保存'; refreshStatus(); loadService(); }
+  catch(e){ $('save-msg').textContent=e.message; }
+};
+(async()=>{
+  try{ await loadSettings(); }catch(e){ $('save-msg').textContent=e.message; }
+  refreshStatus(); loadLast(); loadService();
+  setInterval(refreshStatus,1800);
+  setInterval(loadLast,5000);
+  setInterval(loadService,60000);
+})();
+</script>
+</body></html>

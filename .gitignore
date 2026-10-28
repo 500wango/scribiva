@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+node_modules/
+dist/
+target/
+.env
+*.key
+*.pem
+*.wav
+*.log
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+server/data/
+.DS_Store
+.ruff_cache/
