@@ -181,6 +181,36 @@ def cmd_grant_pro(args) -> int:
     return 0
 
 
+def cmd_approve_device(args) -> int:
+    """Approve a pending device login without email (local development and
+    support). The user code is the one the desktop app shows."""
+    from . import login
+    settings = _settings(args)
+    user_code = login.normalise_user_code(args.code)
+    if not login.USER_CODE_RE.fullmatch(user_code):
+        print('Invalid code; expected the 8-letter code shown in the app (ABCD-EFGH)',
+              file=sys.stderr)
+        return 2
+    if not login.EMAIL_RE.fullmatch(args.email.strip()):
+        print('Invalid email', file=sys.stderr)
+        return 2
+    conn = _open_db(settings)
+    try:
+        if not db.find_pending_user_code(conn, user_code):
+            print('No pending login with that code (expired or already used)', file=sys.stderr)
+            return 1
+        user = db.get_or_create_user_by_email(conn, args.email)
+        approved = db.approve_device(conn, user_code, user['id'])
+    finally:
+        conn.close()
+    if not approved:
+        print('Could not approve the login', file=sys.stderr)
+        return 1
+    print(f"Approved {user_code} for {user['email']} "
+          f"({'new account' if user['created'] else 'existing account'})")
+    return 0
+
+
 def cmd_backup(args) -> int:
     """Consistent online backup (sqlite3 backup API) with an integrity check."""
     import sqlite3
@@ -306,6 +336,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--customer')
     p.add_argument('--db')
     p.set_defaults(func=cmd_grant_pro)
+
+    p = sub.add_parser('approve-device',
+                       help='Approve a pending app login without email (dev/support)')
+    p.add_argument('--code', required=True, help='Code shown in the app, e.g. BCDF-GHJK')
+    p.add_argument('--email', required=True)
+    p.add_argument('--db')
+    p.set_defaults(func=cmd_approve_device)
 
     p = sub.add_parser('backup', help='Write a consistent, integrity-checked SQLite backup')
     p.add_argument('--output', required=True)

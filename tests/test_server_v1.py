@@ -2,10 +2,12 @@
 output script and device/magic-link login (docs/05-API-AND-DATA.md §8)."""
 from __future__ import annotations
 import email
+import os
 import re
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server'))
@@ -234,12 +236,29 @@ class DeviceLoginTests(ServerTestCase, unittest.TestCase):
         finally:
             conn.close()
 
-    def test_login_not_configured_without_mail(self):
+    def test_login_not_configured_without_mail_on_remote_bind(self):
         self.server.shutdown()
         self.server.server_close()
-        self.start_server(mail_outbox=None, smtp_host='')
+        self.start_server(mail_outbox=None, smtp_host='', allow_remote=True)
         status, body, _ = self.request('POST', '/v1/auth/device', body={}, token=False)
         self.assertEqual((status, body['error']['code']), (503, 'LOGIN_NOT_CONFIGURED'))
+
+    def test_loopback_dev_login_is_approved_from_the_cli(self):
+        from scribiva_server.__main__ import main as server_main
+        self.server.shutdown()
+        self.server.server_close()
+        self.start_server(mail_outbox=None, smtp_host='', public_base_url='')
+        status, start, _ = self.request('POST', '/v1/auth/device', body={}, token=False)
+        self.assertEqual(status, 200, start)
+        self.assertTrue(start['verification_uri'].startswith('http://127.0.0.1:'))
+        with patch.dict(os.environ, {'SCRIBIVA_DB': str(self.settings.db_path)}):
+            rc = server_main(['approve-device', '--code', start['user_code'].lower(),
+                              '--email', 'dev@example.com'])
+        self.assertEqual(rc, 0)
+        status, granted, _ = self.request('POST', '/v1/auth/device/token',
+                                          body={'device_code': start['device_code']}, token=False)
+        self.assertEqual(status, 200, granted)
+        self.assertTrue(granted['access_token'].startswith('scr_'))
 
 
 if __name__ == '__main__':

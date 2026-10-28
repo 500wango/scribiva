@@ -91,6 +91,13 @@
   5. **Obsidian 可选插件**（P1）：在编辑器内直接插入，可返回 `verified`，撤销一步完成，不经过剪贴板。基线体验不依赖插件。
 - **代价**：GNOME 扩展需随 GNOME 大版本适配并发布到 extensions.gnome.org；KWin 脚本同理；用户需要额外安装一步。
 
+## ADR-013：Linux 桌面端核心也用 Rust，与 Windows 共用一套编排
+
+- **状态**：Accepted（2026-10-28）
+- **原因**：ADR-001 要求 Tauri 2 + Rust。Linux 曾沿用 Python CLI 作为核心，导致两套状态机、两套接口客户端和两套交付逻辑，行为容易分叉，安装包还依赖 python3。
+- **决策**：状态机、接口客户端、音频处理、焦点判断与交付决策只有一份 Rust 实现（`desktop/src-tauri/src/`），平台差异限定在音频采集、焦点来源、文字输入、快捷键与托盘这几个适配模块。Linux 录音用 `pw-record` 输出原始 PCM；GNOME 焦点与输入经 Scribiva 扩展（ADR-012）；GNOME 自定义快捷键运行 `scribiva --toggle`，由单实例插件转给常驻进程。Linux 桌面端只支持服务模式（需登录）。
+- **代价**：Python 客户端（`src/scribiva/`）降为开发与迁移参考，不再随安装包发布；本地开发需要运行本地服务端并用 `approve-device` 完成登录。
+
 ## 风险台账
 
 | ID | 风险 | 可能性 | 影响 | 缓解/责任 |

@@ -51,8 +51,24 @@ class LoginService:
             raise LoginError(503, 'LOGIN_NOT_CONFIGURED',
                              'Email login is not configured on this server')
 
+    def _loopback_dev(self) -> bool:
+        """A server bound to loopback without mail is a local development
+        server: logins are approved with `scribiva_server approve-device`."""
+        import ipaddress
+        try:
+            loopback = ipaddress.ip_address(self.settings.host).is_loopback
+        except ValueError:
+            loopback = self.settings.host == 'localhost'
+        return loopback and not self.settings.allow_remote and not self.settings.mail_configured
+
+    def _base_url(self) -> str:
+        if self.settings.public_base_url:
+            return self.settings.public_base_url
+        return f'http://127.0.0.1:{self.settings.port}'
+
     def start_device(self, client_name: str | None) -> dict:
-        self._require_configured()
+        if not self._loopback_dev():
+            self._require_configured()
         device_code = secrets.token_urlsafe(32)
         conn = self._connect()
         try:
@@ -71,7 +87,11 @@ class LoginService:
                 raise LoginError(503, 'LOGIN_BUSY', 'Could not allocate a login code')
         finally:
             conn.close()
-        base = self.settings.public_base_url
+        base = self._base_url()
+        if self._loopback_dev():
+            logger.warning('dev_login_pending user_code=%s approve with: python3 -m '
+                           'scribiva_server approve-device --code %s --email <you>',
+                           user_code, user_code)
         return {
             'device_code': device_code,
             'user_code': user_code,

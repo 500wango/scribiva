@@ -18,6 +18,14 @@ python3 -m scribiva_server serve --host 127.0.0.1 --port 8787
 
 `serve` 默认只允许回环地址。若确实需要监听其它地址，必须显式设置 `SCRIBIVA_ALLOW_REMOTE=1`，并且应在 TLS 反向代理之后运行；服务本身不终止 TLS。
 
+本地开发登录（不需要邮件）：服务端只监听回环地址且未配置 SMTP 时，桌面应用可以发起登录；用应用里显示的代码批准即可：
+
+```bash
+PYTHONPATH=server python3 -m scribiva_server approve-device --code ABCD-EFGH --email you@example.com
+```
+
+生产部署（配置了 SMTP 或允许远程访问）不接受这种无邮件登录。
+
 客户端登录：默认打开浏览器走邮箱魔法链接（需配置 SMTP 或 `SCRIBIVA_MAIL_OUTBOX`）；加 `--token` 则粘贴 `create-user` 打印的 token。token 保存为本机 `0600` 文件：
 
 ```bash
