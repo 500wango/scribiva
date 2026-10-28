@@ -199,6 +199,9 @@ class ApiHandler(BaseHTTPRequestHandler):
                 if user:
                     return self._send(200, service.get_dictionary(user))
                 return
+            if path in ('/billing/success', '/billing/cancel', '/billing/portal-return'):
+                kind = {'/billing/success': 'success', '/billing/cancel': 'cancel'}.get(path, 'portal')
+                return self._html(200, pages.billing_result(kind))
             if path == '/login':
                 query = parse_qs(urlsplit(self.path).query, max_num_fields=5)
                 return self._html(200, pages.login_form((query.get('code') or [''])[0][:16]))
@@ -283,6 +286,12 @@ class ApiHandler(BaseHTTPRequestHandler):
                 if not user:
                     return
                 return self._send(200, service.cancel_job(user, parts[2]))
+            if (len(parts) == 4 and parts[0] == 'v1' and parts[1] == 'dictations'
+                    and parts[3] == 'outcome'):
+                user = self._authenticate()
+                if not user:
+                    return
+                return self._send(200, service.record_outcome(user, parts[2], self._json_body()))
 
             if path == '/v1/billing/checkout-session':
                 user = self._authenticate()

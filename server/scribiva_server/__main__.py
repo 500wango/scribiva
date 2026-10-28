@@ -211,6 +211,27 @@ def cmd_approve_device(args) -> int:
     return 0
 
 
+def cmd_metrics(args) -> int:
+    """Weekly north-star and insertion outcome report (no user content)."""
+    settings = _settings(args)
+    conn = _open_db(settings)
+    try:
+        weeks = db.weekly_metrics(conn, args.weeks)
+    finally:
+        conn.close()
+    if args.json:
+        print(json.dumps(weeks, indent=2))
+        return 0
+    print(f"{'week':<10}{'active':>8}{'north*':>8}{'dict.':>8}{'inserted':>10}"
+          f"{'pasted':>8}{'copied':>8}{'noise':>7}")
+    for w in weeks:
+        print(f"{w['week']:<10}{w['active_accounts']:>8}{w['north_star_accounts']:>8}"
+              f"{w['dictations']:>8}{w['inserted']:>10}{w['pasted']:>8}{w['copied']:>8}"
+              f"{w['noise']:>7}")
+    print('north* = accounts with >= 3 completed dictations that week (PRD §2)')
+    return 0
+
+
 def cmd_backup(args) -> int:
     """Consistent online backup (sqlite3 backup API) with an integrity check."""
     import sqlite3
@@ -343,6 +364,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--email', required=True)
     p.add_argument('--db')
     p.set_defaults(func=cmd_approve_device)
+
+    p = sub.add_parser('metrics', help='Weekly north-star and insertion outcome report')
+    p.add_argument('--weeks', type=int, default=8)
+    p.add_argument('--json', action='store_true')
+    p.add_argument('--db')
+    p.set_defaults(func=cmd_metrics)
 
     p = sub.add_parser('backup', help='Write a consistent, integrity-checked SQLite backup')
     p.add_argument('--output', required=True)

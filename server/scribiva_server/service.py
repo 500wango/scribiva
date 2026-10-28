@@ -453,6 +453,20 @@ class DictationService:
             raise ApiError(404, 'JOB_NOT_FOUND', 'Job not found')
         return {'job_id': job['id'], 'status': job['state']}
 
+    def record_outcome(self, user: dict, job_id: str, body: dict) -> dict:
+        outcome = body.get('outcome') if isinstance(body, dict) else None
+        if outcome not in db.INSERT_OUTCOMES:
+            raise ApiError(400, 'INVALID_OUTCOME', 'outcome is not a known value')
+        conn = self._connect()
+        try:
+            job = db.get_job(conn, user['id'], job_id)
+            if not job:
+                raise ApiError(404, 'JOB_NOT_FOUND', 'Job not found')
+            recorded = db.record_outcome(conn, user['id'], job_id, outcome)
+        finally:
+            conn.close()
+        return {'job_id': job_id, 'recorded': recorded}
+
     def recent(self, user: dict, limit: int = 20) -> dict:
         conn = self._connect()
         try:

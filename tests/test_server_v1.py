@@ -141,6 +141,57 @@ class DictionaryAndPipelineTests(ServerTestCase, unittest.TestCase):
             self.assertEqual(body['output_text'], '这个软体很好用')
 
 
+class BillingPagesTests(ServerTestCase, unittest.TestCase):
+    def setUp(self):
+        self.start_server()
+
+    def test_stripe_return_pages_exist_and_grant_nothing(self):
+        for path in ('/billing/success?session_id=cs_test_1', '/billing/cancel',
+                     '/billing/portal-return'):
+            status, page, headers = self.request('GET', path, token=False)
+            self.assertEqual(status, 200, path)
+            self.assertIn('Scribiva', page)
+            self.assertIn("default-src 'none'", headers['Content-Security-Policy'])
+        _, me, _ = self.request('GET', '/v1/me')
+        self.assertEqual(me['plan'], 'free')
+
+
+class OutcomeAndMetricsTests(ServerTestCase, unittest.TestCase):
+    def setUp(self):
+        self.start_server()
+
+    def test_outcome_is_recorded_once_and_validated(self):
+        ids = []
+        for i in range(3):
+            _, body, _ = self.dictation(key=f'job-outcome-{i:04d}')
+            ids.append(body['job_id'])
+        status, body, _ = self.request('POST', f'/v1/dictations/{ids[0]}/outcome',
+                                       body={'outcome': 'inserted'})
+        self.assertEqual((status, body['recorded']), (200, True))
+        status, body, _ = self.request('POST', f'/v1/dictations/{ids[0]}/outcome',
+                                       body={'outcome': 'clipboard_only'})
+        self.assertEqual((status, body['recorded']), (200, False))
+        status, body, _ = self.request('POST', f'/v1/dictations/{ids[1]}/outcome',
+                                       body={'outcome': 'text: hello'})
+        self.assertEqual((status, body['error']['code']), (400, 'INVALID_OUTCOME'))
+        status, body, _ = self.request('POST', '/v1/dictations/job_missing/outcome',
+                                       body={'outcome': 'inserted'})
+        self.assertEqual(status, 404)
+        self.request('POST', f'/v1/dictations/{ids[2]}/outcome',
+                     body={'outcome': 'dispatched_unverified'})
+        from scribiva_server import db
+        conn = db.connect(self.settings.db_path)
+        try:
+            weeks = db.weekly_metrics(conn)
+        finally:
+            conn.close()
+        self.assertEqual(len(weeks), 1)
+        w = weeks[0]
+        self.assertEqual((w['active_accounts'], w['north_star_accounts'], w['dictations']),
+                         (1, 1, 3))
+        self.assertEqual((w['inserted'], w['pasted'], w['copied']), (1, 1, 0))
+
+
 class DeviceLoginTests(ServerTestCase, unittest.TestCase):
     def setUp(self):
         import tempfile

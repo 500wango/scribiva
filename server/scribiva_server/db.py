@@ -117,7 +117,7 @@ CREATE TABLE IF NOT EXISTS magic_links (
 );
 CREATE INDEX IF NOT EXISTS idx_magic_links_email ON magic_links(email, created_at);
 """
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class DbConflict(RuntimeError):
@@ -198,6 +198,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
                          (email_hash(row['email']), row['id']))
         conn.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_hash '
                      'ON users(email_hash)')
+    if version < 3:
+        # v3: how the result reached the user (north-star metric, docs/11).
+        columns = {row['name'] for row in conn.execute('PRAGMA table_info(dictation_jobs)')}
+        if 'insert_outcome' not in columns:
+            conn.execute('ALTER TABLE dictation_jobs ADD COLUMN insert_outcome TEXT')
+        if 'outcome_at' not in columns:
+            conn.execute('ALTER TABLE dictation_jobs ADD COLUMN outcome_at TEXT')
     conn.execute(f'PRAGMA user_version = {SCHEMA_VERSION}')
 
 
@@ -674,3 +681,42 @@ def recent_jobs(conn: sqlite3.Connection, user_id: str, limit: int = 20) -> list
         (user_id, max(1, min(limit, 100))),
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+INSERT_OUTCOMES = ('inserted', 'dispatched_unverified', 'clipboard_only', 'focus_changed',
+                   'suspected_noise', 'own_window')
+
+
+def record_outcome(conn: sqlite3.Connection, user_id: str, job_id: str, outcome: str) -> bool:
+    """Store how a completed job's text reached the user. First report wins."""
+    with transaction(conn, immediate=True):
+        cursor = conn.execute(
+            """UPDATE dictation_jobs SET insert_outcome = ?, outcome_at = ?
+               WHERE id = ? AND user_id = ? AND state = 'completed' AND insert_outcome IS NULL""",
+            (outcome, iso(), job_id, user_id))
+        return cursor.rowcount == 1
+
+
+def weekly_metrics(conn: sqlite3.Connection, weeks: int = 8) -> list[dict]:
+    """North star (PRD §2): accounts with >= 3 completed dictations per ISO week,
+    plus insertion outcome counts. Metadata only; no text."""
+    since = iso(utcnow() - timedelta(weeks=weeks))
+    rows = conn.execute(
+        """SELECT strftime('%Y-W%W', created_at) AS week, user_id, COUNT(*) AS n,
+                  SUM(insert_outcome = 'inserted') AS inserted,
+                  SUM(insert_outcome = 'dispatched_unverified') AS pasted,
+                  SUM(insert_outcome IN ('clipboard_only', 'focus_changed', 'own_window')) AS copied,
+                  SUM(insert_outcome = 'suspected_noise') AS noise
+           FROM dictation_jobs WHERE state = 'completed' AND created_at >= ?
+           GROUP BY week, user_id""", (since,)).fetchall()
+    weeks_out: dict[str, dict] = {}
+    for r in rows:
+        w = weeks_out.setdefault(r['week'], {'week': r['week'], 'active_accounts': 0,
+                                             'north_star_accounts': 0, 'dictations': 0,
+                                             'inserted': 0, 'pasted': 0, 'copied': 0, 'noise': 0})
+        w['active_accounts'] += 1
+        w['north_star_accounts'] += 1 if r['n'] >= 3 else 0
+        w['dictations'] += r['n']
+        for key in ('inserted', 'pasted', 'copied', 'noise'):
+            w[key] += r[key] or 0
+    return [weeks_out[k] for k in sorted(weeks_out)]

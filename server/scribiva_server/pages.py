@@ -85,3 +85,24 @@ def failed(message: str) -> bytes:
 <h1>登录失败 <span lang="en">/ Sign-in failed</span></h1>
 <p class="error" role="alert">{escape(message)}</p>
 <p>请回到应用重新开始登录。<span lang="en">Start again from the app.</span></p>""")
+
+
+def billing_result(kind: str) -> bytes:
+    """Landing pages for Stripe Checkout / Billing Portal return URLs. They
+    never grant anything: entitlement comes only from signed webhooks."""
+    texts = {
+        'success': ('支付已提交 / Payment submitted',
+                    '<p>感谢订阅。Pro 会在 Stripe 确认付款后几秒内生效，回到 Scribiva 即可看到。</p>'
+                    '<p lang="en">Thank you. Pro becomes active a few seconds after Stripe confirms '
+                    'the payment; return to Scribiva to see it.</p>'),
+        'cancel': ('已取消 / Checkout cancelled',
+                   '<p>没有扣款。可以随时从 Scribiva 的“账户与订阅”页面重新订阅。</p>'
+                   '<p lang="en">No charge was made. You can subscribe again from Account &amp; '
+                   'billing in Scribiva.</p>'),
+        'portal': ('已返回 / Back from billing',
+                   '<p>订阅设置已保存在 Stripe。回到 Scribiva 查看最新状态。</p>'
+                   '<p lang="en">Your subscription settings are saved with Stripe. Return to '
+                   'Scribiva to see the current status.</p>'),
+    }
+    title, body = texts.get(kind, texts['portal'])
+    return _page(title, f'<h1>{escape(title)}</h1>{body}<p>可以关闭此页面。You can close this page.</p>')

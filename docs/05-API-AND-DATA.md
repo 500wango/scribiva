@@ -242,3 +242,11 @@ sequenceDiagram
 ### 8.4 月末宽限
 
 当 `used < limit` 且 `used + 本段时长 <= limit + grace_seconds` 时允许本段，扣费为 `min(本段时长, limit - used)`，即扣至 0；之后剩余为 0，下一段返回 `402 QUOTA_EXCEEDED`。`grace_seconds` 由 `SCRIBIVA_GRACE_SECONDS` 配置（默认 180）。
+
+### 8.5 插入结果上报（北极星指标）
+
+`POST /v1/dictations/{job_id}/outcome`，body `{"outcome": "inserted|dispatched_unverified|clipboard_only|focus_changed|suspected_noise|own_window"}` → `200 {"job_id", "recorded"}`。只记录第一次上报；只接受已完成的本人任务；不含文字、不含应用信息。客户端设置 `share_insert_outcome`（默认开启，隐私说明中披露）关闭后不上报。运营查看：`python3 -m scribiva_server metrics`。
+
+### 8.6 Stripe 回跳页
+
+`GET /billing/success`、`/billing/cancel`、`/billing/portal-return` 只显示说明页，不改变权益；权益只来自验签的订阅事件。
