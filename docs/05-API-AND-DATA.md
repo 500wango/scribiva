@@ -94,9 +94,10 @@ fields:
 ## 4. 最小数据库草案
 
 ```sql
--- 示例 DDL：需在迁移时结合身份系统修订字段、索引和外键。
+-- 规划性 DDL（PostgreSQL 语法）。v1.0 实际使用 SQLite（ADR-011），以 `server/scribiva_server/db.py` 的 schema 为准；本草案用于将来迁移时对照。
 CREATE TABLE app_users (
   id UUID PRIMARY KEY,
+  email TEXT UNIQUE NOT NULL,          -- FR-019：同一邮箱只发放一份免费额度
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   stripe_customer_id TEXT UNIQUE,
   deletion_requested_at TIMESTAMPTZ
@@ -136,6 +137,18 @@ CREATE TABLE usage_ledger (
 CREATE TABLE processed_webhook_events (
   provider_event_id TEXT PRIMARY KEY,
   received_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE user_dictionary_terms (       -- FR-018
+  user_id UUID NOT NULL REFERENCES app_users(id),
+  term TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, term)
+);
+CREATE TABLE auth_magic_links (            -- FR-019；只存哈希，一次性，短时效
+  token_hash TEXT PRIMARY KEY,
+  email TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ
 );
 ```
 

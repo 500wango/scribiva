@@ -1,6 +1,6 @@
 # Scribiva v1.0 — 开发文档索引
 
-> 版本：v1.0-draft.1 ｜ 日期：2026-10-26 ｜ 状态：**开发基线草案（未完成技术验证）** ｜ 默认语言：简体中文
+> 版本：v1.0-draft.2 ｜ 日期：2026-10-28 ｜ 状态：**开发基线草案（未完成技术验证）** ｜ 默认语言：简体中文
 
 > 当前可运行实现为 `0.2.0-alpha.1`，见仓库根 [README](../README.md) 与 [server/README.md](../server/README.md)。本目录仍是未来 v1.0 的产品/工程规范，不代表下列平台矩阵与商业能力均已交付。
 
@@ -21,9 +21,11 @@ Scribiva 是一款面向 **Windows + Linux** 的系统级、跨应用 AI 语音�
 | [09-DELIVERY-PLAN.md](09-DELIVERY-PLAN.md) | 执行者 | 技术风险前置、Sprint、任务依赖与退出条件 |
 | [10-RELEASE-OPERATIONS.md](10-RELEASE-OPERATIONS.md) | DevOps | CI、安装签名、自动更新、运行手册 |
 | [11-METRICS-ECONOMICS.md](11-METRICS-ECONOMICS.md) | 产品 / 运营 | $1,000 MRR 模型、漏斗、成本与埋点 |
-| [12-ADR-AND-RISKS.md](12-ADR-AND-RISKS.md) | 技术负责人 | 架构决策记录、风险台账和待定事项 |
+| [12-ADR-AND-RISKS.md](12-ADR-AND-RISKS.md) | 技术负责人 | 架构决策记录（ADR-001～012）、风险台账和待定事项 |
 | [13-DEVELOPER-SETUP.md](13-DEVELOPER-SETUP.md) | 开发 | 仓库建议、环境变量、开发启动、质量检查 |
 | [14-SOURCES.md](14-SOURCES.md) | 全员 | 官方资料、参考项目及核验日期 |
+
+**alpha 实现记录**（英文，描述已交付的 `0.2.0-alpha.1`，不是 v1.0 规范）：[ARCHITECTURE.md](ARCHITECTURE.md) · [SECURITY.md](SECURITY.md) · [ROADMAP.md](ROADMAP.md) · [TEST_REPORT.md](TEST_REPORT.md) · [SOURCES.md](SOURCES.md)
 
 ## 已确认的产品约束
 
@@ -54,6 +56,8 @@ Scribiva 是一款面向 **Windows + Linux** 的系统级、跨应用 AI 语音�
 ## 开工前的 Gate 0
 
 **必须先成功：** 在 Windows、Linux X11、GNOME Wayland、KDE Wayland 各一组受控环境中，将 `Hello 中文 العربية\n- **Markdown**` 插入 Obsidian 两种编辑模式，保留换行、文字顺序与撤销能力；记录失败配置。做不到时缩小支持声明，而不是悄悄移除 Windows/Linux 或 Obsidian 需求。
+
+顺序上 Linux 先行，但 Windows PoC 与 Linux 并行启动（ADR-008）；GNOME/KDE Wayland 还需同时验证焦点信息来源（GNOME Shell 扩展 / KWin 脚本，ADR-012）。
 
 ## 版本变更流程
 

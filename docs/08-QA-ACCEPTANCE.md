@@ -7,9 +7,11 @@
 | Test env ID | 操作系统 | 显示会话 | 最低验证对象 |
 |---|---|---|---|
 | W11-01 | Windows 11 x64 | Native desktop | Obsidian、Word、VS Code、Chrome/Edge、聊天输入区 |
-| LX11-01 | Ubuntu 24.04 x64 | X11 | Obsidian、VS Code、浏览器 |
-| LWG-01 | Ubuntu 24.04 x64 | GNOME Wayland | Obsidian、VS Code、浏览器 |
-| LWK-01 | Fedora 受测稳定版本 x64 | KDE Plasma Wayland | Obsidian、VS Code、浏览器 |
+| LX11-01 | Linux Mint（Cinnamon）受测版 x64 | X11 | Obsidian、VS Code、浏览器 |
+| LWG-01 | Ubuntu 24.04 x64（GNOME 46） | GNOME Wayland | Obsidian、VS Code、浏览器；无 GlobalShortcuts Portal |
+| LWG-02 | Ubuntu 26.04 x64（GNOME 50） | GNOME Wayland | Obsidian、VS Code、浏览器；GlobalShortcuts Portal 可用 |
+| LWK-01 | Fedora 受测稳定版本 x64（Plasma 6.8+） | KDE Plasma Wayland | Obsidian、VS Code、浏览器 |
+| NET-CN-01 | 任一受支持环境 | 中国大陆网络（无代理） | landing page、下载、登录、听写、升级全流程（QA-CN-001）；延迟单独统计 |
 | LWL-01 | Arch/受测版 | Hyprland 或 Sway | 技术验证，首版是否正式支持由 Gate 决定 |
 
 > 以上为**拟测试矩阵**而非已通过的环境。Fedora/桌面/应用版本及具体硬件组合需在 QA 执行表登记，不能以“最新版”代替确切版本号。

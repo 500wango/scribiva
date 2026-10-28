@@ -104,4 +104,10 @@ Voxtype README 表明其仓库为 MIT 许可。复用具体代码时需要在仓
 
 ## 8. 第一条可合并 PR
 
-创建 `TextInjector` 空实现及 `doctor` 命令；打印当前 OS/会话、Portal 可用性（不含用户信息），并且不执行任何注入。随后独立 PR 加入静态测试文字插入。这样可以把权限风险和工程范围逐步分离。
+Python alpha 已有 `doctor` 与 GNOME Wayland 注入实现。v1.0 的首批 PR 建议按风险顺序：
+
+1. GNOME Shell 扩展原型：经 D-Bus 返回焦点窗口 ID，客户端在注入前比对；未安装时只复制（ADR-012，SCR-020）。
+2. Windows 注入 PoC：静态文本写入 Obsidian 两种模式并验证撤销（G0-01）。与上一项并行，避免 Windows 拖后同时首发。
+3. Tauri 端的 `TextInjector` / `FocusAdapter` trait 与 `doctor`，不执行注入。
+
+每个 PR 只引入一类系统权限，便于审查。

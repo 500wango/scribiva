@@ -5,7 +5,7 @@
 ## 1. 统一行为定义
 
 - `HotkeyAdapter`：注册、解除、按下/释放（可选）、检测冲突。所有配置均支持一键回到默认值。
-- `FocusAdapter`：记录活动窗口标识、进程、窗口标题（敏感字段不上传）、编辑上下文可用性。若无法可信识别，则返回 `unknown`。
+- `FocusAdapter`：在**停止录音时**记录活动窗口标识与应用 ID，注入前再次比对；不读取窗口标题和内容。若无法可信识别，则返回 `unknown`，默认转为只复制（ADR-012）。
 - `InputAdapter`：检测输入能力、选择后端、实际插入、执行错误恢复，报告精确结果状态。
 - `ClipboardAdapter`：在获得用户许可时暂存/恢复剪贴板；并发修改期间绝不覆盖新内容。
 - `InstallerDoctor`：识别会话类型、门户可用性、依赖、设备权限并给用户可理解的诊断步骤。
@@ -31,10 +31,14 @@
 | 目标环境 | 推荐快捷键路径 | 推荐文本输出路径 | 重点风险 |
 |---|---|---|---|
 | X11 | Tauri/global shortcut 或 X11 注册 | XTest 按键触发粘贴 + `xclip` / 受测剪贴板 | 键位布局、输入法、焦点 |
-| GNOME Wayland | XDG GlobalShortcuts Portal（可用时）；否则桌面自定义快捷键启动命令 | RemoteDesktop Portal + libei/eitype；经明确授权的 uinput 后备 | Portal 版本/权限、输入通道持续性 |
+| GNOME Wayland | XDG GlobalShortcuts Portal（GNOME 48 起提供；Ubuntu 24.04 的 GNOME 46 没有）；否则桌面自定义快捷键启动命令（只有按下事件，仅支持切换模式） | RemoteDesktop Portal + libei/eitype；经明确授权的 uinput 后备 | Portal 版本/权限、输入通道持续性 |
 | KDE Plasma Wayland | Portal 或 KDE 原生自定义快捷键 | libei/eitype，按实测考虑 dotool | Portal 授权 UI、频繁建连开销 |
 | Sway/Hyprland | compositor 自定义快捷键或其支持的 Portal | `wtype`；失败则用户可控复制/其他受支持后端 | compositor 特性差异 |
 | 其他 Wayland | 标为 Beta 或不支持，待验证 | 不默认假设 `wtype` 可用 | 产品兼容声明失真 |
+
+**焦点信息来源（ADR-012）**：GNOME Wayland 由 Scribiva GNOME Shell 扩展经会话 D-Bus 提供焦点窗口 ID；KDE Plasma Wayland 由 KWin 脚本提供；X11 读取 `_NET_ACTIVE_WINDOW`；wlroots 合成器按其 IPC（如 Sway/Hyprland）实现，未实现前为 `unknown`。终端类窗口（按应用 ID 识别）默认只复制，不发送粘贴快捷键。
+
+**X11 会话现状**：Ubuntu 26.04（GNOME 50）与 KDE Plasma 6.8 已不再提供 X11 会话，X11 支持主要面向仍以 X11 为主的桌面（如 Cinnamon、Xfce、MATE）。
 
 **重要区别**：`wtype` 适用于实现虚拟键盘协议的某些 wlroots 合成器，不能假定 GNOME/KDE 原生 Wayland 支持。`eitype` 使用 libei/EI；`dotool` 和 `ydotool` 通过 uinput 及相应权限提供备用方式。Voxtype 当前默认链 `wtype → eitype → dotool → ydotool → clipboard → xclip` 可作为策略参考，但 Scribiva 应按场景选择顺序，不能盲目逐一调用导致重复输入。
 
