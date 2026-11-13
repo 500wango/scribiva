@@ -2,3 +2,22 @@
   padding-left: 4px;
   font-weight: bold;
 }
+
+.scribiva-overlay {
+  background-color: rgba(20, 20, 24, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  padding: 10px 20px;
+  spacing: 10px;
+  color: #ffffff;
+}
+
+.scribiva-overlay-icon {
+  icon-size: 18px;
+  color: #ff5f57;
+}
+
+.scribiva-overlay-label {
+  font-weight: 700;
+  font-size: 14px;
+}

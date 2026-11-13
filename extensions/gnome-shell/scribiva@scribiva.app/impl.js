@@ -62,6 +62,23 @@ const PHASES = {
     error: {icon: 'dialog-error-symbolic', label: '!', accessible: 'Scribiva: error'},
 };
 
+// Explicit bottom-centre cue. On Wayland the HUD window is unavailable (a
+// client cannot place a window or keep it above others), so the shell draws
+// this overlay itself. It is never reactive and never focusable.
+const OVERLAY_TEXT = {
+    recording: {zh: '录音中 · 再按一次停止', en: 'Recording — press again to stop'},
+    processing: {zh: '转写中…', en: 'Transcribing…'},
+    error: {zh: '听写失败', en: 'Dictation failed'},
+};
+
+function overlayText(phase) {
+    const spec = OVERLAY_TEXT[phase];
+    if (!spec)
+        return '';
+    const lang = (GLib.get_language_names()[0] ?? 'en').toLowerCase();
+    return lang.startsWith('zh') ? spec.zh : spec.en;
+}
+
 // Each hot reload evaluates this module again; GType names must be unique
 // per shell process, so the class gets a per-load suffix.
 const LOAD_ID = `${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
@@ -103,6 +120,68 @@ class ScribivaIndicator extends PanelMenu.Button {
             this.remove_style_class_name(`scribiva-${name}`);
         this.add_style_class_name(`scribiva-${phase}`);
         this.show();
+    }
+});
+
+// Bottom-centre recording cue. Lives in the shell's uiGroup, so it can be
+// positioned and kept above windows on Wayland; reactive=false means it never
+// takes pointer or keyboard focus.
+const ScribivaOverlay = GObject.registerClass({GTypeName: `ScribivaOverlay_${LOAD_ID}`},
+class ScribivaOverlay extends St.BoxLayout {
+    _init() {
+        super._init({
+            style_class: 'scribiva-overlay',
+            reactive: false,
+            can_focus: false,
+            track_hover: false,
+            visible: false,
+        });
+        this._icon = new St.Icon({
+            icon_name: 'media-record-symbolic',
+            style_class: 'scribiva-overlay-icon',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._label = new St.Label({
+            style_class: 'scribiva-overlay-label',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this.add_child(this._icon);
+        this.add_child(this._label);
+        Main.uiGroup.add_child(this);
+        this._monitorsChangedId = Main.layoutManager.connect(
+            'monitors-changed', () => this._reposition());
+        this._reposition();
+    }
+
+    _reposition() {
+        const monitor = Main.layoutManager.primaryMonitor;
+        if (!monitor)
+            return;
+        const [, natW] = this.get_preferred_width(-1);
+        const [, natH] = this.get_preferred_height(natW);
+        this.set_position(
+            Math.round(monitor.x + (monitor.width - natW) / 2),
+            Math.round(monitor.y + monitor.height - natH - 72));
+    }
+
+    setPhase(phase) {
+        const spec = PHASES[phase];
+        if (!spec) {
+            this.hide();
+            return;
+        }
+        this._icon.icon_name = spec.icon;
+        this._label.text = overlayText(phase);
+        this.show();
+        this._reposition();
+    }
+
+    destroy() {
+        if (this._monitorsChangedId) {
+            Main.layoutManager.disconnect(this._monitorsChangedId);
+            this._monitorsChangedId = 0;
+        }
+        super.destroy();
     }
 });
 
@@ -298,6 +377,9 @@ export class Implementation {
         Main.panel.addToStatusArea(this.uuid, this._indicator, 0, 'right');
         this._indicator.hide();
 
+        this._overlay = new ScribivaOverlay();
+        this._overlay.setPhase('idle');
+
         this._keyboard = new VirtualKeyboard();
         this._service = new ScribivaService(phase => this._setState(phase), this._keyboard,
             this.implVersion);
@@ -320,6 +402,9 @@ export class Implementation {
 
         this._indicator?.destroy();
         this._indicator = null;
+
+        this._overlay?.destroy();
+        this._overlay = null;
     }
 
     _setState(phase) {
@@ -330,6 +415,7 @@ export class Implementation {
 
         this._clearStateTimeout();
         this._indicator?.setPhase(phase);
+        this._overlay?.setPhase(phase);
 
         if (phase !== 'idle') {
             this._stateTimeoutId = GLib.timeout_add_seconds(
@@ -338,6 +424,7 @@ export class Implementation {
                 () => {
                     this._stateTimeoutId = 0;
                     this._indicator?.setPhase('idle');
+                    this._overlay?.setPhase('idle');
                     return GLib.SOURCE_REMOVE;
                 });
         }
