@@ -163,6 +163,8 @@ pub fn format_string_list(items: &[String]) -> String {
 
 /// GNOME accelerator such as `<Primary><Alt>v`: at least one modifier, one
 /// alphanumeric key, and never a paste chord (it would fire on every paste).
+/// A bare `F13`–`F24` or `XF86*` media key is also accepted: those keys are
+/// absent from ordinary keyboards, so binding one cannot swallow normal typing.
 pub fn valid_gnome_binding(b: &str) -> bool {
     let Some((mods, key)) = split_binding(b) else {
         return false;
@@ -173,7 +175,16 @@ pub fn valid_gnome_binding(b: &str) -> bool {
         .iter()
         .all(|m| matches!(*m, "<Primary>" | "<Control>" | "<Shift>"));
     let paste = ctrl && only_ctrl_or_shift && key.eq_ignore_ascii_case("v");
-    !mods.is_empty() && key_ok && !paste
+    let bare_safe = mods.is_empty() && (is_high_function_key(key) || key.starts_with("XF86"));
+    (!mods.is_empty() || bare_safe) && key_ok && !paste
+}
+
+/// `F13`–`F24`, the keys with no default meaning on a normal keyboard.
+fn is_high_function_key(key: &str) -> bool {
+    key.to_ascii_uppercase()
+        .strip_prefix('F')
+        .and_then(|n| n.parse::<u8>().ok())
+        .is_some_and(|n| (13..=24).contains(&n))
 }
 
 const MODS: &[&str] = &[
@@ -972,6 +983,12 @@ mod tests {
         assert!(!valid_gnome_binding("<Control>V"));
         assert!(!valid_gnome_binding("<Primary><Shift>v"));
         assert!(!valid_gnome_binding("v"));
+        assert!(valid_gnome_binding("F13"));
+        assert!(valid_gnome_binding("F24"));
+        assert!(valid_gnome_binding("XF86AudioPlay"));
+        assert!(!valid_gnome_binding("F12"));
+        assert!(!valid_gnome_binding("F25"));
+        assert!(!valid_gnome_binding("a"));
         assert!(!valid_gnome_binding("<Primary><Alt>v; rm -rf"));
         assert!(!valid_gnome_binding("<Primary><Alt>"));
         assert!(!valid_gnome_binding("<Primary><Alt>ä"));

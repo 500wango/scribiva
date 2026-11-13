@@ -12,11 +12,17 @@ const MOD_ALIASES: Record<string, string> = {
 const MOD_ORDER = ['<Primary>', '<Alt>', '<Shift>', '<Super>'];
 
 /**
- * `Ctrl+Alt+B` → `<Primary><Alt>b` (GNOME accelerator). Requires at
- * least one modifier, matching the backend's `valid_gnome_binding`.
+ * `Ctrl+Alt+V` → `<Primary><Alt>v` (GNOME accelerator). A bare `F13`–`F24` or
+ * `XF86*` media key is accepted too, matching the backend's
+ * `valid_gnome_binding`; other single keys would swallow normal typing.
  */
 export function toGnomeBinding(input: string): string | null {
   const parts = input.split('+').map(p => p.trim()).filter(Boolean);
+  if (parts.length === 1) {
+    if (/^f(1[3-9]|2[0-4])$/i.test(parts[0])) return parts[0].toUpperCase();
+    if (/^xf86[a-z0-9]+$/i.test(parts[0])) return parts[0];
+    return null;
+  }
   if (parts.length < 2) return null;
   const mods: string[] = [];
   for (const raw of parts.slice(0, -1)) {
