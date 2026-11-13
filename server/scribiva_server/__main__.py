@@ -61,8 +61,12 @@ def cmd_serve(args) -> int:
     address = f'http://{settings.host}:{server.server_port}'
     print(f'Scribiva API {__version__} listening on {address}', flush=True)
     print(f'Database: {settings.db_path}', flush=True)
+    if settings.asr_local:
+        print(f'ASR: {settings.asr_base_url} (model {settings.asr_model})', flush=True)
     if not settings.groq_api_key:
-        print('WARNING: GROQ_API_KEY is not set; dictation returns 503 PROVIDER_NOT_CONFIGURED',
+        print('WARNING: GROQ_API_KEY is not set; '
+              + ('grammar correction is skipped (raw text)' if settings.asr_local
+                 else 'dictation returns 503 PROVIDER_NOT_CONFIGURED'),
               file=sys.stderr, flush=True)
     if not _is_loopback(settings.host):
         print('WARNING: remote binding requested; terminate TLS in a reverse proxy and '

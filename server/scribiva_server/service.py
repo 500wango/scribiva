@@ -181,7 +181,9 @@ class DictationService:
             },
             'privacy': {
                 'processing_region': 'United States',
-                'processors': ['Groq (speech recognition and text editing)'],
+                'processors': (['Self-hosted speech recognition', 'Groq (text editing)']
+                               if self.settings.asr_local else
+                               ['Groq (speech recognition and text editing)']),
                 'audio_retention': 'processed in memory; not stored by this server',
                 'text_retention_seconds': self.settings.result_ttl_seconds,
                 'server_holds_provider_key': bool(self.settings.groq_api_key),

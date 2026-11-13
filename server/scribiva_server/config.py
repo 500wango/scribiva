@@ -4,9 +4,11 @@ No third-party dependency. Secrets are read from the environment only and are
 never written to the SQLite database or logs.
 """
 from __future__ import annotations
+import ipaddress
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
 DEFAULT_DB = Path(__file__).resolve().parents[1] / 'data' / 'scribiva.sqlite3'
 
@@ -41,6 +43,21 @@ def _bool(name: str, default: bool = False) -> bool:
     raise ConfigError(f'{name} must be true or false')
 
 
+def _asr_url_ok(url: str) -> bool:
+    """Audio is sent without a key: plain http only to this machine."""
+    parsed = urlsplit(url)
+    if parsed.scheme == 'https' and parsed.hostname:
+        return True
+    if parsed.scheme != 'http' or not parsed.hostname:
+        return False
+    if parsed.hostname == 'localhost':
+        return True
+    try:
+        return ipaddress.ip_address(parsed.hostname).is_loopback
+    except ValueError:
+        return False
+
+
 @dataclass(frozen=True)
 class Settings:
     db_path: Path = DEFAULT_DB
@@ -49,6 +66,9 @@ class Settings:
     groq_api_key: str = ''
     groq_base_url: str = 'https://api.groq.com/openai/v1'
     asr_model: str = 'whisper-large-v3-turbo'
+    # Empty: ASR uses Groq. Otherwise an OpenAI-compatible transcription
+    # endpoint without a key, e.g. a local whisper.cpp server.
+    asr_base_url: str = ''
     grammar_model: str = 'openai/gpt-oss-20b'
     free_seconds: int = 1800
     pro_seconds: int = 36000
@@ -90,6 +110,7 @@ class Settings:
             groq_base_url=(os.environ.get('GROQ_BASE_URL', 'https://api.groq.com/openai/v1').strip()
                            or 'https://api.groq.com/openai/v1').rstrip('/'),
             asr_model=os.environ.get('SCRIBIVA_ASR_MODEL', 'whisper-large-v3-turbo').strip(),
+            asr_base_url=os.environ.get('SCRIBIVA_ASR_BASE_URL', '').strip().rstrip('/'),
             grammar_model=os.environ.get('SCRIBIVA_GRAMMAR_MODEL', 'openai/gpt-oss-20b').strip(),
             free_seconds=_int('SCRIBIVA_FREE_SECONDS', 1800, 0),
             pro_seconds=_int('SCRIBIVA_PRO_SECONDS', 36000, 0),
@@ -121,9 +142,15 @@ class Settings:
             raise ConfigError('SCRIBIVA_PORT is out of range')
         if settings.db_path.suffix == '':
             raise ConfigError('SCRIBIVA_DB must point to a file')
+        if settings.asr_base_url and not _asr_url_ok(settings.asr_base_url):
+            raise ConfigError('SCRIBIVA_ASR_BASE_URL must be https, or http on a loopback host')
         if settings.smtp_tls not in ('starttls', 'ssl', 'none'):
             raise ConfigError('SMTP_TLS must be starttls, ssl or none')
         return settings
+
+    @property
+    def asr_local(self) -> bool:
+        return bool(self.asr_base_url)
 
     @property
     def billing_configured(self) -> bool:
