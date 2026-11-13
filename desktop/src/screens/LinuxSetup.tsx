@@ -1,9 +1,39 @@
 // Linux desktop integration (FR-001, ADR-012): GNOME shortcut, the Scribiva
 // GNOME Shell extension and the KDE KWin focus script. All are user-level and
 // need no administrator rights.
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import type { LinuxSetup as Setup } from '../backend';
 import { useApp } from '../ui';
+
+const MOD_ALIASES: Record<string, string> = {
+  ctrl: '<Primary>', control: '<Primary>', primary: '<Primary>',
+  alt: '<Alt>', shift: '<Shift>', super: '<Super>', meta: '<Super>', win: '<Super>',
+};
+const MOD_ORDER = ['<Primary>', '<Alt>', '<Shift>', '<Super>'];
+
+/**
+ * `Ctrl+Alt+B` → `<Primary><Alt>b` (GNOME accelerator). Requires at
+ * least one modifier, matching the backend's `valid_gnome_binding`.
+ */
+export function toGnomeBinding(input: string): string | null {
+  const parts = input.split('+').map(p => p.trim()).filter(Boolean);
+  if (parts.length < 2) return null;
+  const mods: string[] = [];
+  for (const raw of parts.slice(0, -1)) {
+    const mod = MOD_ALIASES[raw.toLowerCase()];
+    if (!mod) return null;
+    if (!mods.includes(mod)) mods.push(mod);
+  }
+  if (!mods.length) return null;
+  mods.sort((a, b) => MOD_ORDER.indexOf(a) - MOD_ORDER.indexOf(b));
+  let key = parts[parts.length - 1];
+  if (key.length === 1) key = key.toLowerCase();
+  else if (/^f([1-9]|1[0-9]|2[0-4])$/i.test(key)) key = key.toUpperCase();
+  else if (key.toLowerCase() === 'space') key = 'space';
+  else if (key.toLowerCase() === 'tab') key = 'Tab';
+  else return null;
+  return mods.join('') + key;
+}
 
 export function LinuxSetup() {
   const { backend, t, refreshStatus } = useApp();
@@ -11,11 +41,17 @@ export function LinuxSetup() {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [relogin, setRelogin] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [hotkeyError, setHotkeyError] = useState('');
+  const hotkeyId = useId();
 
   const refresh = useCallback(async () => {
     try { setSetup(await backend.linuxSetupStatus()); } catch (e) { setError(String(e)); }
   }, [backend]);
   useEffect(() => { refresh(); }, [refresh]);
+
+  useEffect(() => { setDraft(setup?.hotkey.label || 'Ctrl+Alt+V'); },
+    [setup?.hotkey.label]);
 
   async function run(action: 'hotkey' | 'extension' | 'kwin') {
     setBusy(action); setError('');
@@ -26,6 +62,23 @@ export function LinuxSetup() {
       await refreshStatus();
     } catch (e) { setError(String(e)); }
     finally { setBusy(''); }
+  }
+
+  async function applyHotkey(value: string) {
+    const binding = toGnomeBinding(value);
+    if (!binding) { setHotkeyError(t('lx_hotkey_invalid')); return; }
+    setBusy('hotkey'); setHotkeyError(''); setError('');
+    try {
+      const r = await backend.linuxSetup('hotkey', binding);
+      setSetup(r.status);
+      await refreshStatus();
+    } catch (e) {
+      const msg = String(e);
+      const detail = msg.replace(/^.*HOTKEY_CONFLICT:\s*/i, '');
+      setHotkeyError(/hotkey_conflict/i.test(msg)
+        ? t('lx_hotkey_conflict', { detail })
+        : msg);
+    } finally { setBusy(''); }
   }
 
   if (!setup) return <p className="muted">{error || t('loading')}</p>;
@@ -46,12 +99,26 @@ export function LinuxSetup() {
           </p>
           <p className="muted small">{t('lx_cancel_hint')}</p>
         </div>
-        {setup.hotkey.available && (
-          <button type="button" disabled={busy !== ''} onClick={() => run('hotkey')}>
-            {setup.hotkey.installed ? t('lx_hotkey_rebind') : t('lx_hotkey_bind')}
-          </button>
-        )}
       </div>
+      {setup.hotkey.available && (
+        <div className="field">
+          <label htmlFor={hotkeyId}>{t('lx_hotkey_custom')}</label>
+          <input id={hotkeyId} type="text" value={draft} spellCheck={false} autoComplete="off"
+            placeholder="Ctrl+Alt+V" aria-describedby={hotkeyId + '-help'}
+            aria-invalid={!!hotkeyError}
+            onChange={e => setDraft(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') applyHotkey(draft); }} />
+          <p id={hotkeyId + '-help'} className="help">{t('lx_hotkey_custom_help')}</p>
+          {hotkeyError && <p className="error-text" role="alert">{hotkeyError}</p>}
+          <div className="actions">
+            <button type="button" className="soft" disabled={busy !== '' || !draft.trim()}
+              onClick={() => applyHotkey(draft)}>{t('apply')}</button>
+            <button type="button" className="soft" disabled={busy !== ''}
+              onClick={() => { setDraft('Ctrl+Alt+V'); applyHotkey('Ctrl+Alt+V'); }}>
+              {t('hotkeyReset')}</button>
+          </div>
+        </div>
+      )}
 
       {setup.gnome && (
         <div className="setup-row">
