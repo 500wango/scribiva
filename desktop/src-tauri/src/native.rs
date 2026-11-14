@@ -17,7 +17,7 @@ use crate::tray;
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 
 pub fn now_ms() -> u64 {
@@ -1099,11 +1099,30 @@ pub fn launch_action<S: AsRef<str>>(argv: &[S]) -> LaunchAction {
     action
 }
 
+/// Held shortcut keys repeat: one press can fire several `--toggle`
+/// invocations. Ignore a toggle that arrives this soon after the previous one
+/// so a single press cannot start and immediately stop a recording.
+const TOGGLE_DEBOUNCE: Duration = Duration::from_millis(1000);
+static LAST_TOGGLE: Mutex<Option<Instant>> = Mutex::new(None);
+
+fn accept_toggle() -> bool {
+    let now = Instant::now();
+    let mut last = LAST_TOGGLE.lock().unwrap_or_else(|e| e.into_inner());
+    if last.is_some_and(|t| now.duration_since(t) < TOGGLE_DEBOUNCE) {
+        return false;
+    }
+    *last = Some(now);
+    true
+}
+
 /// Run a launch action against the running instance. Recording work runs on
 /// its own thread (callers may be on the event loop or a D-Bus thread).
 pub fn run_launch_action(app: &AppHandle, action: LaunchAction) {
     match action {
         LaunchAction::Toggle | LaunchAction::Cancel => {
+            if action == LaunchAction::Toggle && !accept_toggle() {
+                return;
+            }
             let Some(n) = app.try_state::<Arc<Native>>().map(|s| s.inner().clone()) else {
                 return;
             };

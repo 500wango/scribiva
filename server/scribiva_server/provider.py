@@ -14,15 +14,22 @@ from .config import Settings
 
 
 _QUESTION_MARKERS = ('吗', '是不是', '什么', '怎么', '为什么', '如何', '哪', '谁', '多少')
+# Long dictation often contains "对吧?" or "什么" mid-paragraph; the guard is
+# for short question-shaped queries, not for whole transcripts.
+_QUESTION_GUARD_MAX_CHARS = 200
 
 
 def _is_question(text: str) -> bool:
     """A transcript that asks something must stay a question.
 
     Guards against the editor answering the input instead of transcribing it
-    (observed with question-shaped search queries).
+    (observed with question-shaped search queries). Only short inputs are
+    guarded: reverting a long transcript because it contains a question word
+    would discard every other correction.
     """
     t = text.strip()
+    if not t or len(t) > _QUESTION_GUARD_MAX_CHARS:
+        return False
     return t.endswith(('?', '？')) or any(m in t for m in _QUESTION_MARKERS)
 
 
